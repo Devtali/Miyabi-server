@@ -33,7 +33,7 @@ class SessionManager {
         const sessionPath = path.join(SESSIONS_DIR, sessionId);
         if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath, { recursive: true });
 
-        const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+        const {version} = await fetchLatestWaVersion;
 
         const sock = makeWASocket({
             printQRInTerminal: false,
