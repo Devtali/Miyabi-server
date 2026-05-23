@@ -36,6 +36,7 @@ class SessionManager {
         const sessionPath = path.join(SESSIONS_DIR, sessionId);
         if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath, { recursive: true });
 
+        // Initialiser l'authentification avec Baileys
         const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
 
         const sock = makeWASocket({

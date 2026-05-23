@@ -63,12 +63,18 @@
 
         /* ── Layout ── */
         .page {
-            position: relative; z-index: 1;
-            min-height: 100vh;
+            position: fixed; inset: 0; z-index: 1;
             display: flex; flex-direction: column;
             align-items: center; justify-content: flex-start;
             padding: 2rem 1rem;
+            overflow-y: auto;
         }
+        @media (max-height: 600px) {
+    .page {
+        justify-content: flex-start;
+        padding-top: 1rem;
+    }
+}
 
         /* ── Header ── */
         .header {
