@@ -2,26 +2,36 @@ const { GoogleGenAI } = require('@google/genai');
 const personality = require('./personality');
 const logger = require('../utils/logger');
 
+// Modèles avec fallback pour absorber les pics de charge (503/429)
+const MODELS = ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-flash-latest'];
+
 class GeminiAI {
     constructor() {
         this.apiKeys = [];
+
+        // Clé officielle Google AI Studio en priorité
+        if (process.env.GEMINI_API_KEY) {
+            this.apiKeys.push(process.env.GEMINI_API_KEY.trim());
+        }
+
+        // Clés secondaires éventuelles
         let i = 1;
         while (process.env[`GEMINI_API_KEY_${i}`]) {
-            this.apiKeys.push(process.env[`GEMINI_API_KEY_${i}`]);
+            const extraKey = process.env[`GEMINI_API_KEY_${i}`].trim();
+            if (!this.apiKeys.includes(extraKey)) {
+                this.apiKeys.push(extraKey);
+            }
             i++;
-        }
-        if (this.apiKeys.length === 0 && process.env.GEMINI_API_KEY) {
-            this.apiKeys.push(process.env.GEMINI_API_KEY);
         }
 
         this.currentKeyIndex = 0;
         this.conversations = new Map();
 
         if (this.apiKeys.length === 0) {
-            logger.warn('Gemini: Aucune clé API Gemini trouvée dans les variables d\'environnement. Mode fallback actif.');
+            logger.warn('Gemini: Aucune clé API Gemini trouvée. Mode fallback autonome actif.');
             this.ai = null;
         } else {
-            logger.info(`Gemini: ${this.apiKeys.length} clé(s) API chargée(s)`);
+            logger.info(`Gemini: ${this.apiKeys.length} clé(s) API initialisée(s)`);
             this._initModel();
         }
     }
@@ -29,69 +39,90 @@ class GeminiAI {
     _initModel() {
         if (this.apiKeys.length === 0) return;
         const key = this.apiKeys[this.currentKeyIndex];
-        this.ai = new GoogleGenAI({ apiKey: key });
-        logger.info(`Gemini: utilisation clé #${this.currentKeyIndex + 1}`);
+        try {
+            this.ai = new GoogleGenAI({
+                apiKey: key,
+                httpOptions: {
+                    headers: {
+                        'User-Agent': 'aistudio-build'
+                    }
+                }
+            });
+            logger.info(`Gemini: utilisation clé #${this.currentKeyIndex + 1}`);
+        } catch (err) {
+            logger.error(`Gemini: échec initialisation client: ${err.message}`);
+        }
     }
 
     _rotateKey() {
         if (this.apiKeys.length <= 1) {
-            logger.error('Toutes les clés API Gemini sont épuisées');
             return false;
         }
-        const nextIndex = (this.currentKeyIndex + 1) % this.apiKeys.length;
-        if (nextIndex === this.currentKeyIndex) {
-            logger.error('Toutes les clés API Gemini sont épuisées');
-            return false;
-        }
-        this.currentKeyIndex = nextIndex;
+        this.currentKeyIndex = (this.currentKeyIndex + 1) % this.apiKeys.length;
         this._initModel();
         logger.info(`Gemini: rotation vers clé #${this.currentKeyIndex + 1}`);
         return true;
     }
 
-    _isQuotaError(error) {
+    _isRetryableError(error) {
         const msg = (error && (error.message || error.statusText || '')) + '';
         return msg.includes('429') ||
+               msg.includes('503') ||
                msg.includes('quota') ||
                msg.includes('RESOURCE_EXHAUSTED') ||
                msg.includes('rate limit') ||
-               msg.includes('Too Many Requests');
+               msg.includes('UNAVAILABLE') ||
+               msg.includes('high demand') ||
+               msg.includes('API_KEY_INVALID') ||
+               msg.includes('API key not valid');
     }
 
     async _generateWithFallback(prompt, systemInstruction = null) {
         if (!this.ai && this.apiKeys.length > 0) {
             this._initModel();
         }
-        if (!this.ai) {
-            return null;
-        }
+        if (!this.ai) return null;
 
-        const maxRetries = Math.max(1, this.apiKeys.length);
-        let attempts = 0;
-        while (attempts < maxRetries) {
-            try {
-                const requestConfig = {};
-                if (systemInstruction) {
-                    requestConfig.systemInstruction = systemInstruction;
-                }
-                const response = await this.ai.models.generateContent({
-                    model: 'gemini-3.8-flash',
-                    contents: prompt,
-                    config: requestConfig
-                });
-                return (response.text || '').trim();
-            } catch (error) {
-                if (this._isQuotaError(error)) {
-                    logger.warn(`Quota dépassé sur clé #${this.currentKeyIndex + 1}`);
-                    const rotated = this._rotateKey();
-                    if (!rotated) return null;
-                    attempts++;
-                } else {
-                    logger.error(`Erreur génération Gemini: ${error.message}`);
-                    return null;
+        const maxKeyAttempts = Math.max(1, this.apiKeys.length);
+
+        for (let keyAttempt = 0; keyAttempt < maxKeyAttempts; keyAttempt++) {
+            for (const model of MODELS) {
+                try {
+                    const requestConfig = {};
+                    if (systemInstruction) {
+                        requestConfig.systemInstruction = systemInstruction;
+                    }
+
+                    const response = await this.ai.models.generateContent({
+                        model,
+                        contents: prompt,
+                        config: requestConfig
+                    });
+
+                    const text = (response?.text || '').trim();
+                    if (text) return text;
+
+                } catch (error) {
+                    const errMsg = error?.message || '';
+                    if (this._isRetryableError(error)) {
+                        logger.warn(`Gemini (${model}): indisponible (${errMsg.slice(0, 70)}...), essai modèle alternatif...`);
+                        continue; // Essayer le modèle suivant
+                    } else {
+                        logger.error(`Gemini erreur non-récupérable (${model}): ${errMsg.slice(0, 100)}`);
+                        break;
+                    }
                 }
             }
+
+            // Si tous les modèles ont échoué sur cette clé, tenter la rotation
+            if (this.apiKeys.length > 1) {
+                const rotated = this._rotateKey();
+                if (!rotated) break;
+            } else {
+                break;
+            }
         }
+
         return null;
     }
 
@@ -118,37 +149,74 @@ Valeurs possibles pour intent:
 - WALLET_ADD_AC : ajouter abyss coins → params.query, params.amount
 - WALLET_REMOVE_AC : retirer abyss coins → params.query, params.amount
 - WALLET_VIEW : voir fiche joueur → params.query
-- WALLET_MAJ : mise à jour générale de toutes les fiches
-
-Exemples wallet:
-"crée la fiche de Raizen pseudo ChronoVolt classe Silent" → {"intent":"WALLET_CREATE","confidence":0.99,"params":{"nom":"Raizen","pseudo":"ChronoVolt","classe":"Silent","gems":0,"abyssCoins":0}}
-"ajoute 500 gems à ChronoVolt" → {"intent":"WALLET_ADD_GEMS","confidence":0.99,"params":{"query":"ChronoVolt","amount":500}}
-"retire 200 AC à Raizen" → {"intent":"WALLET_REMOVE_AC","confidence":0.99,"params":{"query":"Raizen","amount":200}}
-"montre la fiche de ChronoVolt" → {"intent":"WALLET_VIEW","confidence":0.99,"params":{"query":"ChronoVolt"}}
-"supprime la fiche de Raizen" → {"intent":"WALLET_DELETE","confidence":0.99,"params":{"query":"Raizen"}}
-"lance la MAJ" → {"intent":"WALLET_MAJ","confidence":0.99,"params":{}}`;
+- WALLET_MAJ : mise à jour générale de toutes les fiches`;
 
         try {
             const text = await this._generateWithFallback(prompt);
-            if (!text) return { intent: 'CHAT', confidence: 0.5, params: {} };
-
-            const clean = this._extractJSON(text);
-            if (!clean) throw new Error('Pas de JSON valide');
-
-            const parsed = JSON.parse(clean);
-            const validIntents = [
-                'CHAT','DOWNLOAD_AUDIO','DOWNLOAD_VIDEO','SEARCH_WEB',
-                'GROUP_ACTION','CONVERT_TO_AUDIO',
-                'WALLET_CREATE','WALLET_DELETE','WALLET_ADD_GEMS','WALLET_REMOVE_GEMS',
-                'WALLET_ADD_AC','WALLET_REMOVE_AC','WALLET_VIEW','WALLET_MAJ'
-            ];
-            if (!validIntents.includes(parsed.intent)) parsed.intent = 'CHAT';
-            return parsed;
-
+            if (text) {
+                const clean = this._extractJSON(text);
+                if (clean) {
+                    const parsed = JSON.parse(clean);
+                    const validIntents = [
+                        'CHAT','DOWNLOAD_AUDIO','DOWNLOAD_VIDEO','SEARCH_WEB',
+                        'GROUP_ACTION','CONVERT_TO_AUDIO',
+                        'WALLET_CREATE','WALLET_DELETE','WALLET_ADD_GEMS','WALLET_REMOVE_GEMS',
+                        'WALLET_ADD_AC','WALLET_REMOVE_AC','WALLET_VIEW','WALLET_MAJ'
+                    ];
+                    if (validIntents.includes(parsed.intent)) return parsed;
+                }
+            }
         } catch (error) {
-            logger.warn('Fallback intent → CHAT:', error.message);
-            return { intent: 'CHAT', confidence: 0.5, params: {} };
+            logger.warn(`Erreur parsing Gemini intent: ${error.message}`);
         }
+
+        // Fallback heuristique local résilient
+        return this._heuristicIntent(message);
+    }
+
+    _heuristicIntent(msg) {
+        const lower = (msg || '').toLowerCase().trim();
+
+        // Wallet
+        if (lower.includes('fiche de') || lower.includes('crée la fiche')) {
+            return { intent: 'WALLET_CREATE', confidence: 0.8, params: {} };
+        }
+        if (lower.includes('gems')) {
+            const amount = parseInt(lower.match(/\d+/)?.[0] || '0', 10);
+            return {
+                intent: lower.includes('retire') ? 'WALLET_REMOVE_GEMS' : 'WALLET_ADD_GEMS',
+                confidence: 0.8,
+                params: { amount }
+            };
+        }
+        if (lower.includes('abyss') || lower.includes(' ac ') || lower.endsWith(' ac')) {
+            const amount = parseInt(lower.match(/\d+/)?.[0] || '0', 10);
+            return {
+                intent: lower.includes('retire') ? 'WALLET_REMOVE_AC' : 'WALLET_ADD_AC',
+                confidence: 0.8,
+                params: { amount }
+            };
+        }
+
+        // Téléchargement audio
+        if (lower.startsWith('musique ') || lower.startsWith('audio ') || lower.includes('télécharge la musique') || lower.includes('télécharge le son') || lower.includes('play ')) {
+            const q = lower.replace(/^(télécharge la musique|télécharge le son|musique|audio|play)\s*/i, '').trim();
+            return { intent: 'DOWNLOAD_AUDIO', confidence: 0.85, params: { query: q || msg } };
+        }
+
+        // Téléchargement vidéo
+        if (lower.startsWith('video ') || lower.startsWith('vidéo ') || lower.includes('télécharge la vidéo') || lower.includes('youtube.com') || lower.includes('youtu.be')) {
+            const q = lower.replace(/^(télécharge la vidéo|vidéo|video)\s*/i, '').trim();
+            return { intent: 'DOWNLOAD_VIDEO', confidence: 0.85, params: { query: q || msg } };
+        }
+
+        // Recherche
+        if (lower.startsWith('cherche ') || lower.startsWith('recherche ') || lower.startsWith('news ') || lower.startsWith('actualité')) {
+            const q = lower.replace(/^(cherche|recherche|news|actualité|actualités)\s*/i, '').trim();
+            return { intent: 'SEARCH_WEB', confidence: 0.85, params: { query: q || msg } };
+        }
+
+        return { intent: 'CHAT', confidence: 0.5, params: {} };
     }
 
     async generateChatResponse(userId, message, emotion, isMother = false) {
@@ -178,7 +246,7 @@ Miyabi:`;
 
             return response;
         } catch (error) {
-            logger.error('Erreur Gemini chat:', error);
+            logger.error(`Erreur Gemini chat: ${error.message}`);
             return personality.fallbackResponse(emotion);
         }
     }

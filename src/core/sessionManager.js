@@ -24,7 +24,7 @@ const msgRetryCounterCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 // 2. Cache pour les métadonnées de groupe (évite les requêtes réseau excessives)
 const groupCache = new NodeCache({ stdTTL: 600, checkperiod: 120 });
 
-// 3. Store en mémoire pour getMessage (indispensable pour les retries et le déchiffrement)
+// 3. Store en mémoire pour getMessage (indispensable pour les retries et le déchiffrement Signal)
 const messageStore = new NodeCache({ stdTTL: 1800, checkperiod: 300 });
 
 const activeSessions = new Map();
@@ -37,6 +37,14 @@ class SessionManager {
     }
 
     async createSession(sessionId, phoneNumber = null, usePairingCode = false) {
+        // Fermer toute autre session non connectée pour éviter les conflits de clés Signal et Bad MAC
+        for (const [id, s] of activeSessions.entries()) {
+            if (id !== sessionId && s.status !== 'connected') {
+                logger.info(`Nettoyage ancienne session en attente: ${id}`);
+                this.deleteSession(id);
+            }
+        }
+
         if (activeSessions.has(sessionId)) {
             const existing = activeSessions.get(sessionId);
             if (existing.status === 'connected') {
@@ -77,9 +85,9 @@ class SessionManager {
             // Cache des tentatives de messages pour éviter les boucles infinies
             msgRetryCounterCache,
 
-            // Résolution des messages pour les retries et votes
+            // Résolution des messages pour les retries et votes (anti Bad MAC / waiting message)
             getMessage: async (key) => {
-                if (key.id) {
+                if (key?.id) {
                     const cached = messageStore.get(key.id);
                     if (cached) return cached;
                 }
@@ -124,7 +132,7 @@ class SessionManager {
                     this.io.to(sessionId).emit('pairing_code', { code });
                     this._updateStatus(sessionId, 'code_ready');
                 } catch (err) {
-                    logger.error('Erreur pairing code:', err.message);
+                    logger.error(`Erreur pairing code: ${err.message}`);
                     this.io.to(sessionId).emit('error', { message: 'Erreur code d\'appairage: ' + err.message });
                 }
             }, 1500);
@@ -173,8 +181,8 @@ class SessionManager {
 
                 logger.warn(`⚠️ Connexion fermée (${sessionId}), code: ${statusCode}`);
 
-                if (statusCode === DisconnectReason.loggedOut) {
-                    logger.info(`🚪 Session ${sessionId} déconnectée (loggedOut)`);
+                if (statusCode === DisconnectReason.loggedOut || statusCode === DisconnectReason.badSession) {
+                    logger.info(`🚪 Session ${sessionId} déconnectée / session invalide`);
                     this._updateStatus(sessionId, 'logged_out');
                     this.io.to(sessionId).emit('disconnected', { reason: 'logged_out' });
                     this.deleteSession(sessionId);
@@ -201,7 +209,13 @@ class SessionManager {
         });
 
         // ── Sauvegarde des identifiants d'authentification ──
-        sock.ev.on('creds.update', saveCreds);
+        sock.ev.on('creds.update', async () => {
+            try {
+                await saveCreds();
+            } catch (e) {
+                logger.error(`Erreur sauvegarde creds (${sessionId}): ${e.message}`);
+            }
+        });
 
         // ── Gestion du cache des métadonnées de groupe ──
         sock.ev.on('groups.update', async (groupUpdates) => {
@@ -216,14 +230,12 @@ class SessionManager {
         sock.ev.on('group-participants.update', async ({ id, participants, action }) => {
             const cached = groupCache.get(id);
             if (cached) {
-                // Rafraîchir les métadonnées pour garder le cache à jour
                 try {
                     const fresh = await sock.groupMetadata(id);
                     groupCache.set(id, fresh);
                 } catch (e) {}
             }
 
-            // Message d'accueil automatique si configuré
             if (action === 'add') {
                 for (const participant of participants) {
                     const number = participant.split('@')[0];
@@ -241,12 +253,22 @@ class SessionManager {
         sock.ev.on('messages.upsert', async ({ messages, type }) => {
             if (type !== 'notify') return;
             for (const msg of messages) {
-                if (msg.key?.id && msg.message) {
+                if (!msg || !msg.key) continue;
+
+                // Enregistrer pour getMessage
+                if (msg.key.id && msg.message) {
                     messageStore.set(msg.key.id, msg.message);
                 }
+
                 if (msg.key.fromMe) continue;
+                if (msg.key.remoteJid === 'status@broadcast') continue;
+
                 const isGroup = msg.key.remoteJid?.endsWith('@g.us');
-                await messageHandler.handleMessage(sock, msg, isGroup);
+                try {
+                    await messageHandler.handleMessage(sock, msg, isGroup);
+                } catch (handlerErr) {
+                    logger.error(`Erreur handleMessage non capturée: ${handlerErr?.stack || handlerErr?.message || handlerErr}`);
+                }
             }
         });
 
@@ -298,7 +320,6 @@ class SessionManager {
     }
 }
 
-// Export pour permettre à d'autres modules d'enregistrer des messages envoyés
 module.exports = SessionManager;
 module.exports.messageStore = messageStore;
 module.exports.groupCache = groupCache;

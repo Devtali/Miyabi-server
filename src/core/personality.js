@@ -37,12 +37,14 @@ class Personality {
     }
 
     isMother(number) {
-        const clean = number.replace('@s.whatsapp.net', '').replace(/\D/g, '');
+        if (!number || !this.motherNumber) return false;
+        const clean = String(number).replace('@s.whatsapp.net', '').replace(/\D/g, '');
         return clean === String(this.motherNumber).replace(/\D/g, '');
     }
 
     isOwner(number) {
-        const clean = number.replace('@s.whatsapp.net', '').replace(/\D/g, '');
+        if (!number || !this.ownerNumber) return false;
+        const clean = String(number).replace('@s.whatsapp.net', '').replace(/\D/g, '');
         return clean === String(this.ownerNumber).replace(/\D/g, '');
     }
 

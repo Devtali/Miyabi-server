@@ -12,6 +12,14 @@ const fs = require('fs');
 class MessageHandler {
 
     async handleMessage(sock, message, isGroup = false) {
+        if (!sock || !message || !message.key || !message.key.remoteJid) return;
+
+        // Ignorer les statuts WhatsApp
+        if (message.key.remoteJid === 'status@broadcast') return;
+
+        // Ignorer les messages stubs sans contenu
+        if (!message.message) return;
+
         try {
             const sender = message.key.remoteJid;
             const senderNumber = message.key.participant || sender;
@@ -104,7 +112,7 @@ class MessageHandler {
             await this._setPresence(sock, sender, 'paused');
 
         } catch (error) {
-            logger.error('Erreur handleMessage:', error);
+            logger.error(`Erreur handleMessage: ${error?.stack || error?.message || error}`);
             try {
                 await this._setPresence(sock, message?.key?.remoteJid, 'paused');
             } catch (e) {}
@@ -120,13 +128,17 @@ class MessageHandler {
         if (stickersEnabled) {
             const stickerBuffer = await stickerHandler.getStickerBuffer(emotion.sticker);
             if (stickerBuffer) {
-                await sock.sendMessage(sender, { sticker: stickerBuffer }, { quoted: message });
+                try {
+                    await sock.sendMessage(sender, { sticker: stickerBuffer }, { quoted: message });
+                } catch (e) {
+                    await sock.sendMessage(sender, { sticker: stickerBuffer });
+                }
             }
         }
     }
 
     async _handleDownloadAudio(sock, sender, params, emotion, userMsg) {
-        const query = params.query;
+        const query = params?.query;
         if (!query) {
             await this._sendText(sock, sender, 'Quel morceau tu veux ? Donne-moi un titre ou un artiste.', userMsg);
             return;
@@ -142,6 +154,7 @@ class MessageHandler {
                 }, { quoted: userMsg });
                 await this._react(sock, sender, userMsg.key, '🎵');
             } catch (err) {
+                logger.error(`Erreur envoi audio: ${err.message}`);
                 await this._sendText(sock, sender, await gemini.generateErrorResponse(emotion.name, 'DOWNLOAD_FAILED'), userMsg);
             } finally {
                 downloadService.cleanup(result.path);
@@ -152,7 +165,7 @@ class MessageHandler {
     }
 
     async _handleDownloadVideo(sock, sender, params, emotion, userMsg) {
-        const query = params.query;
+        const query = params?.query;
         if (!query) {
             await this._sendText(sock, sender, 'Quelle vidéo tu veux ? Donne-moi un titre ou une URL.', userMsg);
             return;
@@ -167,6 +180,7 @@ class MessageHandler {
                 }, { quoted: userMsg });
                 await this._react(sock, sender, userMsg.key, '🎬');
             } catch (err) {
+                logger.error(`Erreur envoi vidéo: ${err.message}`);
                 await this._sendText(sock, sender, await gemini.generateErrorResponse(emotion.name, 'DOWNLOAD_FAILED'), userMsg);
             } finally {
                 downloadService.cleanup(result.path);
@@ -177,7 +191,7 @@ class MessageHandler {
     }
 
     async _handleSearch(sock, sender, params, emotion, userMsg) {
-        const query = params.query;
+        const query = params?.query;
         if (!query) {
             await this._sendText(sock, sender, 'Tu cherches quoi exactement ?', userMsg);
             return;
@@ -247,7 +261,7 @@ class MessageHandler {
                 await this._sendText(sock, sender, await gemini.generateErrorResponse(emotion.name, 'DOWNLOAD_FAILED'), rawMsg);
             }
         } catch (err) {
-            logger.error('Erreur conversion vidéo:', err.message);
+            logger.error(`Erreur conversion vidéo: ${err.message}`);
             await this._sendText(sock, sender, await gemini.generateErrorResponse(emotion.name, 'DOWNLOAD_FAILED'), rawMsg);
         } finally {
             await this._setPresence(sock, sender, 'paused');
@@ -272,7 +286,7 @@ class MessageHandler {
 
     // Déballe les conteneurs spéciaux de WhatsApp (ephemeral, viewOnce, etc.)
     _unwrapMessage(rawMessage) {
-        let msg = rawMessage.message;
+        let msg = rawMessage?.message;
         if (!msg) return null;
 
         if (msg.ephemeralMessage?.message) {
@@ -306,7 +320,7 @@ class MessageHandler {
     // Baileys read receipts (coche bleue)
     async _markAsRead(sock, message) {
         try {
-            if (message?.key) {
+            if (sock && message?.key) {
                 await sock.readMessages([message.key]);
             }
         } catch (e) {}
@@ -315,7 +329,7 @@ class MessageHandler {
     // Baileys presence update ('composing' | 'recording' | 'paused')
     async _setPresence(sock, jid, presence = 'composing') {
         try {
-            if (jid) {
+            if (sock && jid) {
                 await sock.sendPresenceUpdate(presence, jid);
             }
         } catch (e) {}
@@ -324,7 +338,7 @@ class MessageHandler {
     // Baileys emoji reaction
     async _react(sock, jid, key, emoji) {
         try {
-            if (jid && key) {
+            if (sock && jid && key) {
                 await sock.sendMessage(jid, {
                     react: { text: emoji, key }
                 });
@@ -334,20 +348,35 @@ class MessageHandler {
 
     // Envoi de texte avec citation automatique (quoted) et stockage dans le cache
     async _sendText(sock, jid, text, quotedMessage = null) {
+        if (!sock || !jid || !text) return null;
         try {
-            const options = quotedMessage ? { quoted: quotedMessage } : {};
-            const sent = await sock.sendMessage(jid, { text }, options);
-
-            // Mettre en cache pour getMessage si besoin
-            if (sent?.key?.id && sent.message) {
-                const { messageStore } = require('../core/sessionManager');
-                if (messageStore) {
-                    messageStore.set(sent.key.id, sent.message);
+            // Tenter d'abord avec la citation si un message valide est fourni
+            if (quotedMessage && quotedMessage.key) {
+                try {
+                    const sent = await sock.sendMessage(jid, { text }, { quoted: quotedMessage });
+                    this._cacheSent(sent);
+                    return sent;
+                } catch (quoteErr) {
+                    logger.warn(`Échec envoi avec citation (${quoteErr.message}), envoi direct sans citation...`);
                 }
             }
+
+            // Envoi direct
+            const sent = await sock.sendMessage(jid, { text });
+            this._cacheSent(sent);
             return sent;
         } catch (err) {
-            logger.error('Erreur envoi texte:', err.message);
+            logger.error(`Erreur envoi texte (${jid}): ${err?.message || err}`);
+            return null;
+        }
+    }
+
+    _cacheSent(sent) {
+        if (sent?.key?.id && sent.message) {
+            const { messageStore } = require('../core/sessionManager');
+            if (messageStore) {
+                messageStore.set(sent.key.id, sent.message);
+            }
         }
     }
 }
