@@ -4,5 +4,4 @@ sessions/
 .DS_Store
 *.log
 src/data/
-stickers/*.webp
 temp/
