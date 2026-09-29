@@ -1,0 +1,6 @@
+{
+  "name": "Miyabi - Assistant IA WhatsApp",
+  "description": "Serveur et interface pour le bot WhatsApp Miyabi avec intégration Gemini AI et Socket.io.",
+  "permissions": [],
+  "capabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

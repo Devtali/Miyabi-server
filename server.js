@@ -34,9 +34,16 @@ io.on('connection', (socket) => {
     socket.on('join_session', (sessionId) => {
         socket.join(sessionId);
         console.log(`📡 Client ${socket.id} rejoint session: ${sessionId}`);
-        const status = sessionManager.getStatus(sessionId);
-        if (status !== 'not_found') {
-            socket.emit('status_update', { status });
+        const session = sessionManager.getSession(sessionId);
+        if (session) {
+            if (session.lastQR) {
+                console.log(`📡 Envoi immédiat du QR existant à ${socket.id}`);
+                socket.emit('qr', { qr: session.lastQR });
+            }
+            if (session.lastPairingCode) {
+                socket.emit('pairing_code', { code: session.lastPairingCode });
+            }
+            socket.emit('status_update', { status: session.status });
         }
     });
     socket.on('disconnect', () => {
@@ -44,9 +51,9 @@ io.on('connection', (socket) => {
     });
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`\n🎀 Miyabi Server démarré`);
-    console.log(`🌐 Interface: http://localhost:${PORT}`);
-    console.log(`📡 API: http://localhost:${PORT}/api\n`);
+const PORT = 3000;
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`\n🎀 Miyabi Server démarré sur le port ${PORT}`);
+    console.log(`🌐 Interface: http://0.0.0.0:${PORT}`);
+    console.log(`📡 API: http://0.0.0.0:${PORT}/api\n`);
 });

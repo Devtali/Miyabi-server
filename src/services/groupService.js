@@ -132,9 +132,9 @@ class GroupService {
         try {
             const metadata = await sock.groupMetadata(groupId);
             const botJid = sock.user?.id;
-            if (!botJid) return false;
-            const botNumber = botJid.split(':')[0] + '@s.whatsapp.net';
-            const participant = metadata.participants.find(p => p.id === botNumber);
+            if (!botJid || !metadata?.participants) return false;
+            const botNum = botJid.split(':')[0].split('@')[0];
+            const participant = metadata.participants.find(p => (p.id && p.id.startsWith(botNum)) || (p.jid && p.jid.startsWith(botNum)));
             return participant?.admin === 'admin' || participant?.admin === 'superadmin';
         } catch {
             return false;

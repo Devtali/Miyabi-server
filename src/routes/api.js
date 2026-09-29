@@ -1,8 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { v4: uuidv4 } = require('crypto').webcrypto ? 
-    { v4: () => require('crypto').randomUUID() } : 
-    { v4: () => require('crypto').randomUUID() };
+const crypto = require('crypto');
 
 let sessionManager;
 
@@ -10,26 +8,40 @@ function setSessionManager(sm) {
     sessionManager = sm;
 }
 
-// POST /api/connect — Initier une connexion avec un numéro
+// POST /api/connect — Initier une session (QR code officiel sans numéro requis)
 router.post('/connect', async (req, res) => {
     try {
-        const { phone } = req.body;
+        const { phone, usePairingCode } = req.body || {};
 
-        if (!phone) {
-            return res.status(400).json({ success: false, error: 'Numéro requis' });
-        }
-
-        // Nettoyer le numéro (garder uniquement les chiffres)
-        const cleanPhone = phone.replace(/\D/g, '');
-        if (cleanPhone.length < 8) {
-            return res.status(400).json({ success: false, error: 'Numéro invalide' });
+        let cleanPhone = null;
+        if (usePairingCode) {
+            if (!phone) {
+                return res.status(400).json({ success: false, error: 'Numéro requis pour le code d\'appairage' });
+            }
+            cleanPhone = phone.replace(/\D/g, '');
+            if (cleanPhone.length < 8) {
+                return res.status(400).json({ success: false, error: 'Numéro de téléphone invalide' });
+            }
+        } else if (phone) {
+            cleanPhone = phone.replace(/\D/g, '');
         }
 
         // Générer un sessionId unique
-        const sessionId = require('crypto').randomUUID();
+        const sessionId = crypto.randomUUID();
 
-        // Créer la session (asynchrone - le pairing code arrivera via Socket.io)
-        sessionManager.createSession(sessionId, cleanPhone);
+        // Lancer la session Baileys en arrière-plan
+        sessionManager.createSession(sessionId, cleanPhone, !!usePairingCode);
+
+        // Attendre brièvement si le QR code est généré immédiatement
+        if (!usePairingCode) {
+            for (let i = 0; i < 8; i++) {
+                await new Promise(r => setTimeout(r, 250));
+                const qr = sessionManager.getQR(sessionId);
+                if (qr) {
+                    return res.json({ success: true, sessionId, qr });
+                }
+            }
+        }
 
         return res.json({ success: true, sessionId });
 
@@ -37,6 +49,22 @@ router.post('/connect', async (req, res) => {
         console.error('Erreur /connect:', error);
         return res.status(500).json({ success: false, error: 'Erreur serveur' });
     }
+});
+
+// GET /api/qr/:sessionId — Récupérer le QR code actuel de la session
+router.get('/qr/:sessionId', (req, res) => {
+    const { sessionId } = req.params;
+    const session = sessionManager.getSession(sessionId);
+    if (!session) {
+        return res.status(404).json({ success: false, error: 'Session non trouvée' });
+    }
+    return res.json({
+        success: true,
+        sessionId,
+        status: session.status,
+        qr: session.lastQR,
+        code: session.lastPairingCode
+    });
 });
 
 // GET /api/status/:sessionId — Vérifier le statut d'une session
@@ -48,7 +76,7 @@ router.get('/status/:sessionId', (req, res) => {
 
 // POST /api/disconnect — Déconnecter une session
 router.post('/disconnect', (req, res) => {
-    const { sessionId } = req.body;
+    const { sessionId } = req.body || {};
     if (!sessionId) return res.status(400).json({ success: false, error: 'sessionId requis' });
     sessionManager.deleteSession(sessionId);
     return res.json({ success: true, message: 'Session supprimée' });

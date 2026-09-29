@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Miyabi — Assistant IA WhatsApp</title>
+    <meta name="description" content="Serveur et interface pour le bot WhatsApp Miyabi avec intégration Gemini AI et Socket.io.">
+    <meta property="og:title" content="Miyabi — Assistant IA WhatsApp">
+    <meta property="og:description" content="Serveur et interface pour le bot WhatsApp Miyabi avec intégration Gemini AI et Socket.io.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;900&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
     <script src="/socket.io/socket.io.js"></script>
@@ -26,22 +29,51 @@
             --glow-blue: 0 0 30px rgba(98,112,240,.3);
         }
 
-        html, body {
-            height: 100%;
+        html {
+            min-height: 100%;
+            overflow-y: auto;
+            overflow-x: hidden;
+            scrollbar-width: thin;
+            scrollbar-color: var(--pink-dim) var(--bg);
+        }
+
+        body {
+            min-height: 100%;
             background: var(--bg);
             color: var(--text);
             font-family: 'Outfit', sans-serif;
             overflow-x: hidden;
         }
 
+        /* Custom interactive scrollbar */
+        ::-webkit-scrollbar {
+            width: 10px;
+        }
+        ::-webkit-scrollbar-track {
+            background: var(--bg);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 99px;
+            border: 2px solid var(--bg);
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--pink-dim);
+        }
+        ::-webkit-scrollbar-thumb:active {
+            background: var(--pink);
+        }
+
         .bg-layer {
             position: fixed; inset: 0; z-index: 0;
+            pointer-events: none;
             background:
                 radial-gradient(ellipse 80% 60% at 20% 10%, rgba(98,112,240,.12) 0%, transparent 60%),
                 radial-gradient(ellipse 60% 50% at 80% 90%, rgba(232,97,154,.10) 0%, transparent 60%);
         }
         .grid-overlay {
             position: fixed; inset: 0; z-index: 0;
+            pointer-events: none;
             background-image:
                 linear-gradient(rgba(98,112,240,.04) 1px, transparent 1px),
                 linear-gradient(90deg, rgba(98,112,240,.04) 1px, transparent 1px);
@@ -63,16 +95,16 @@
             position: relative; z-index: 1;
             min-height: 100vh;
             display: flex; flex-direction: column;
-            align-items: center; justify-content: center;
-            padding: 2rem 1rem;
+            align-items: center; justify-content: flex-start;
+            padding: 2.5rem 1rem 3.5rem;
         }
 
         .header {
-            text-align: center; margin-bottom: 2rem;
+            text-align: center; margin-bottom: 1.8rem;
             animation: fadeDown .8s ease both;
         }
         .logo-ring {
-            width: 80px; height: 80px; margin: 0 auto 1.2rem;
+            width: 76px; height: 76px; margin: 0 auto 1.1rem;
             border-radius: 50%;
             background: linear-gradient(135deg, var(--pink), var(--blue));
             display: flex; align-items: center; justify-content: center;
@@ -87,24 +119,24 @@
 
         h1 {
             font-family: 'Cinzel', serif;
-            font-size: clamp(1.8rem, 5vw, 3rem);
+            font-size: clamp(1.8rem, 5vw, 2.8rem);
             font-weight: 900;
             background: linear-gradient(135deg, #fff 20%, var(--pink) 60%, var(--blue));
             -webkit-background-clip: text; -webkit-text-fill-color: transparent;
             letter-spacing: .12em;
-            margin-bottom: .4rem;
+            margin-bottom: .3rem;
         }
         .tagline {
-            font-size: .9rem; color: var(--text-dim);
+            font-size: .88rem; color: var(--text-dim);
             font-style: italic; letter-spacing: .05em;
         }
 
         .card {
-            width: 100%; max-width: 420px;
+            width: 100%; max-width: 440px;
             background: var(--surface);
             border: 1px solid var(--border);
             border-radius: 20px;
-            padding: 2rem 1.8rem;
+            padding: 1.8rem 1.6rem;
             box-shadow: 0 25px 60px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.05);
             animation: fadeUp .9s ease both .2s;
         }
@@ -112,36 +144,51 @@
         @keyframes fadeDown { from { opacity:0; transform:translateY(-20px); } to { opacity:1; transform:none; } }
         @keyframes fadeUp   { from { opacity:0; transform:translateY(20px);  } to { opacity:1; transform:none; } }
 
-        .steps { display: flex; gap: .5rem; margin-bottom: 1.8rem; }
-        .step {
-            flex: 1; height: 3px; border-radius: 99px;
-            background: var(--border); transition: background .4s;
+        /* Mode Tabs */
+        .method-tabs {
+            display: flex; gap: .4rem;
+            background: rgba(255,255,255,.03);
+            padding: 4px; border-radius: 12px;
+            border: 1px solid var(--border);
+            margin-bottom: 1.4rem;
         }
-        .step.active   { background: var(--pink); box-shadow: 0 0 12px var(--pink); }
-        .step.done     { background: var(--success); }
+        .method-tab {
+            flex: 1; padding: .6rem .4rem;
+            text-align: center; border-radius: 8px;
+            font-size: .78rem; font-weight: 600;
+            cursor: pointer; border: none; background: transparent;
+            color: var(--text-dim); transition: all .2s;
+            display: flex; align-items: center; justify-content: center; gap: .4rem;
+        }
+        .method-tab:hover { color: var(--text); }
+        .method-tab.active {
+            background: linear-gradient(135deg, rgba(232,97,154,.25), rgba(98,112,240,.25));
+            color: #fff; border: 1px solid var(--pink-dim);
+            box-shadow: 0 0 15px rgba(232,97,154,.2);
+        }
 
         .section { display: none; }
-        .section.visible { display: block; animation: fadeUp .4s ease; }
+        .section.visible { display: block; animation: fadeUp .3s ease; }
 
         .section-title {
-            font-family: 'Cinzel', serif; font-size: 1rem;
-            color: var(--pink); letter-spacing: .1em;
-            margin-bottom: .4rem;
+            font-family: 'Cinzel', serif; font-size: .95rem;
+            color: var(--pink); letter-spacing: .08em;
+            margin-bottom: .3rem;
         }
-        .section-desc { font-size: .85rem; color: var(--text-dim); margin-bottom: 1.5rem; line-height: 1.6; }
+        .section-desc { font-size: .82rem; color: var(--text-dim); margin-bottom: 1.2rem; line-height: 1.5; }
 
         .input-wrap { position: relative; margin-bottom: 1.2rem; }
         .input-wrap label {
-            display: block; font-size: .78rem; font-weight: 500;
-            color: var(--text-dim); margin-bottom: .5rem; letter-spacing: .05em;
+            display: block; font-size: .75rem; font-weight: 500;
+            color: var(--text-dim); margin-bottom: .4rem; letter-spacing: .05em;
             text-transform: uppercase;
         }
         input[type="tel"] {
-            width: 100%; padding: .9rem 1rem;
+            width: 100%; padding: .85rem 1rem;
             background: rgba(255,255,255,.04);
             border: 1px solid var(--border);
             border-radius: 10px;
-            color: var(--text); font-family: 'Outfit', sans-serif; font-size: 1rem;
+            color: var(--text); font-family: 'Outfit', sans-serif; font-size: .95rem;
             outline: none; transition: border-color .2s, box-shadow .2s;
         }
         input[type="tel"]:focus {
@@ -151,10 +198,10 @@
         input::placeholder { color: var(--text-dim); }
 
         .btn {
-            width: 100%; padding: .95rem;
+            width: 100%; padding: .85rem;
             border: none; border-radius: 10px; cursor: pointer;
-            font-family: 'Cinzel', serif; font-size: .9rem;
-            font-weight: 600; letter-spacing: .1em;
+            font-family: 'Cinzel', serif; font-size: .88rem;
+            font-weight: 600; letter-spacing: .08em;
             transition: all .25s;
         }
         .btn-primary {
@@ -167,31 +214,33 @@
         .btn-outline {
             background: transparent; border: 1px solid var(--border);
             color: var(--text-dim); margin-top: .6rem;
-            font-family: 'Outfit', sans-serif; font-size: .82rem; letter-spacing: .05em;
+            font-family: 'Outfit', sans-serif; font-size: .8rem; letter-spacing: .04em;
         }
         .btn-outline:hover { border-color: var(--text-dim); color: var(--text); }
 
         /* ── QR Code ── */
         .qr-wrapper {
             display: flex; flex-direction: column; align-items: center;
-            margin: 1.2rem 0;
+            margin: 1rem 0 1.2rem;
         }
         .qr-container {
             background: #fff;
             border-radius: 16px;
-            padding: 16px;
+            padding: 14px;
             box-shadow: 0 0 40px rgba(232,97,154,.3);
-            margin-bottom: 1rem;
+            margin-bottom: .8rem;
+            transition: transform .2s ease;
         }
+        .qr-container:hover { transform: scale(1.02); }
         .qr-container canvas, .qr-container img { display: block; }
         .qr-label {
-            font-size: .78rem; color: var(--text-dim);
+            font-size: .75rem; color: var(--text-dim);
             text-align: center; letter-spacing: .05em;
             text-transform: uppercase;
         }
         .qr-expires {
-            font-size: .75rem; color: var(--pink);
-            text-align: center; margin-top: .3rem;
+            font-size: .72rem; color: var(--pink);
+            text-align: center; margin-top: .2rem;
         }
 
         /* Loader QR */
@@ -199,24 +248,38 @@
             width: 200px; height: 200px;
             display: flex; flex-direction: column;
             align-items: center; justify-content: center;
-            gap: 1rem;
+            gap: .9rem;
+            background: rgba(255,255,255,.02);
+            border: 1px dashed var(--border);
+            border-radius: 16px;
         }
         .qr-spinner {
-            width: 40px; height: 40px;
+            width: 38px; height: 38px;
             border: 3px solid var(--border);
             border-top-color: var(--pink);
             border-radius: 50%;
             animation: spin .8s linear infinite;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
-        .qr-loading-text { font-size: .82rem; color: var(--text-dim); text-align: center; }
+        .qr-loading-text { font-size: .8rem; color: var(--text-dim); text-align: center; line-height: 1.4; }
+
+        /* Code d'appairage */
+        .code-box {
+            font-family: 'Outfit', monospace;
+            font-size: 1.6rem; letter-spacing: 0.22em; font-weight: 700;
+            color: #fff; background: rgba(0,0,0,0.4);
+            border: 2px dashed var(--pink); border-radius: 12px;
+            padding: 1rem; text-align: center; margin: 1rem 0;
+            box-shadow: 0 0 20px rgba(232,97,154,0.25);
+            user-select: all;
+        }
 
         /* Instructions */
         .instructions { margin: .8rem 0; }
         .instr-item {
-            display: flex; align-items: flex-start; gap: .8rem;
-            padding: .5rem 0; border-bottom: 1px solid var(--border);
-            font-size: .82rem; color: var(--text-dim); line-height: 1.5;
+            display: flex; align-items: flex-start; gap: .7rem;
+            padding: .45rem 0; border-bottom: 1px solid var(--border);
+            font-size: .8rem; color: var(--text-dim); line-height: 1.45;
         }
         .instr-item:last-child { border-bottom: none; }
         .instr-num {
@@ -229,8 +292,8 @@
         /* Status */
         .status-bar {
             display: flex; align-items: center; gap: .7rem;
-            padding: .75rem 1rem; border-radius: 8px;
-            font-size: .82rem; margin-bottom: 1rem;
+            padding: .7rem .9rem; border-radius: 8px;
+            font-size: .8rem; margin-bottom: 1rem;
             border: 1px solid transparent;
         }
         .status-bar.waiting  { background: rgba(98,112,240,.1); border-color: rgba(98,112,240,.3); color: var(--blue); }
@@ -242,28 +305,28 @@
 
         /* Success */
         .success-icon {
-            width: 70px; height: 70px; border-radius: 50%;
+            width: 65px; height: 65px; border-radius: 50%;
             background: rgba(78,204,163,.15); border: 2px solid var(--success);
             display: flex; align-items: center; justify-content: center;
-            font-size: 2rem; margin: 0 auto 1.5rem;
+            font-size: 1.8rem; margin: 0 auto 1.2rem;
             box-shadow: 0 0 30px rgba(78,204,163,.3);
             animation: popIn .5s cubic-bezier(.34,1.56,.64,1);
         }
         @keyframes popIn { from{transform:scale(0);opacity:0;} to{transform:scale(1);opacity:1;} }
         .success-title {
             font-family: 'Cinzel', serif; text-align: center;
-            font-size: 1.2rem; color: var(--success); margin-bottom: .5rem;
+            font-size: 1.15rem; color: var(--success); margin-bottom: .4rem;
         }
-        .success-sub { text-align: center; font-size: .82rem; color: var(--text-dim); line-height: 1.6; }
+        .success-sub { text-align: center; font-size: .8rem; color: var(--text-dim); line-height: 1.5; }
 
-        .features { margin-top: 2rem; display: grid; grid-template-columns: 1fr 1fr; gap: .7rem; }
+        .features { margin-top: 1.8rem; display: grid; grid-template-columns: 1fr 1fr; gap: .7rem; width: 100%; max-width: 440px; }
         .feature {
             background: var(--surface); border: 1px solid var(--border);
             border-radius: 12px; padding: .8rem;
         }
-        .feat-icon { font-size: 1.2rem; margin-bottom: .3rem; }
+        .feat-icon { font-size: 1.1rem; margin-bottom: .25rem; }
         .feat-title { font-size: .75rem; font-weight: 600; color: var(--text); margin-bottom: .2rem; }
-        .feat-desc  { font-size: .68rem; color: var(--text-dim); line-height: 1.4; }
+        .feat-desc  { font-size: .67rem; color: var(--text-dim); line-height: 1.35; }
 
         .footer { margin-top: 1.5rem; text-align: center; font-size: .72rem; color: var(--text-dim); }
 
@@ -287,20 +350,81 @@
         </div>
 
         <div class="card">
-            <div class="steps">
-                <div class="step active" id="step1"></div>
-                <div class="step" id="step2"></div>
-                <div class="step" id="step3"></div>
+            <!-- Onglets de sélection du mode de connexion -->
+            <div class="method-tabs" id="methodTabs">
+                <button class="method-tab active" id="tabQR" onclick="switchMethod('qr')">
+                    <span>📷</span> Scanner QR (Direct)
+                </button>
+                <button class="method-tab" id="tabCode" onclick="switchMethod('code')">
+                    <span>🔢</span> Code par numéro
+                </button>
             </div>
 
-            <!-- SECTION 1 : Numéro -->
-            <div class="section visible" id="sec-phone">
-                <div class="section-title">CONNEXION</div>
-                <p class="section-desc">Entre ton numéro WhatsApp pour connecter Miyabi.</p>
+            <!-- SECTION 1 : QR Code (Méthode officielle Baileys sans numéro) -->
+            <div class="section visible" id="sec-qr">
+                <div class="section-title">CONNEXION PAR QR CODE</div>
+                <p class="section-desc">Clique sur le bouton ci-dessous pour lancer la session et générer le QR code.</p>
+
+                <!-- État initial : en attente du clic de l'utilisateur -->
+                <div id="qrIdle" style="text-align:center; padding: 1.8rem 1.2rem; border: 1px dashed var(--border); border-radius: 16px; margin: 1rem 0; background: rgba(255,255,255,.02);">
+                    <div style="font-size: 2.4rem; margin-bottom: .6rem;">📱</div>
+                    <div style="font-size: .95rem; font-weight: 600; color: var(--text); margin-bottom: .3rem;">Prêt à connecter Miyabi ?</div>
+                    <div style="font-size: .8rem; color: var(--text-dim); line-height: 1.5; margin-bottom: 1.4rem;">
+                        Ouvre WhatsApp sur ton téléphone (Appareils connectés), puis clique pour générer le QR code.
+                    </div>
+                    <button class="btn btn-primary" id="btnStartQR" onclick="startQRGeneration()">
+                        📷 Générer le QR Code
+                    </button>
+                </div>
+
+                <!-- Zone active (visible uniquement après clic sur Générer) -->
+                <div id="qrActiveArea" style="display:none;">
+                    <div class="qr-wrapper">
+                        <div class="qr-loading" id="qrLoading">
+                            <div class="qr-spinner"></div>
+                            <div class="qr-loading-text">Génération du QR code Baileys...<br>Quelques secondes</div>
+                        </div>
+                        <div class="qr-container" id="qrContainer" style="display:none;">
+                            <div id="qrCode"></div>
+                        </div>
+                        <div class="qr-label" id="qrLabel" style="display:none;">Scan avec WhatsApp</div>
+                        <div class="qr-expires" id="qrExpires" style="display:none;">⏱ Se régénère automatiquement si expiré</div>
+                    </div>
+
+                    <div class="instructions">
+                        <div class="instr-item">
+                            <div class="instr-num">1</div>
+                            <span>Ouvre <strong>WhatsApp</strong> sur ton téléphone</span>
+                        </div>
+                        <div class="instr-item">
+                            <div class="instr-num">2</div>
+                            <span>Va dans <strong>Menu (⋮) / Réglages → Appareils connectés</strong></span>
+                        </div>
+                        <div class="instr-item">
+                            <div class="instr-num">3</div>
+                            <span>Appuie sur <strong>Connecter un appareil</strong> et pointe la caméra</span>
+                        </div>
+                    </div>
+
+                    <div style="display:flex; gap:.6rem; margin-top:.8rem;">
+                        <button class="btn btn-outline" style="flex:1;" onclick="regenerateQR()">
+                            🔄 Régénérer QR
+                        </button>
+                        <button class="btn btn-outline" style="flex:1; border-color:rgba(240,98,98,.3); color:var(--error);" onclick="cancelQRGeneration()">
+                            ✕ Annuler
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SECTION 2 : Pairing Code (Alternative avec numéro) -->
+            <div class="section" id="sec-code">
+                <div class="section-title">CODE D'ASSOCIATION</div>
+                <p class="section-desc">Entre ton numéro pour recevoir un code à 8 chiffres à saisir dans WhatsApp.</p>
 
                 <div class="input-wrap">
-                    <label>Numéro WhatsApp</label>
-                    <input type="tel" id="phoneInput" placeholder="237XXXXXXXXX" autocomplete="tel">
+                    <label>Numéro WhatsApp avec indicatif</label>
+                    <input type="tel" id="phoneInput" placeholder="Ex: 237692798136" autocomplete="tel">
                 </div>
 
                 <div id="phoneError" class="status-bar error" style="display:none;">
@@ -308,76 +432,51 @@
                     <span id="phoneErrorMsg">Numéro invalide</span>
                 </div>
 
-                <button class="btn btn-primary" id="btnConnect" onclick="startConnection()">
-                    Connecter Miyabi
+                <div id="codeDisplayArea" style="display:none;">
+                    <div style="font-size:.78rem; color:var(--text-dim); text-align:center;">Ton code d'association WhatsApp :</div>
+                    <div class="code-box" id="codeBox">--------</div>
+                    <div style="font-size:.75rem; color:var(--pink); text-align:center; margin-bottom:1rem;">
+                        Entre ce code dans : WhatsApp > Appareils connectés > Connecter avec un numéro
+                    </div>
+                </div>
+
+                <button class="btn btn-primary" id="btnGetCode" onclick="requestPairingCode()">
+                    Obtenir le code d'association
                 </button>
             </div>
 
-            <!-- SECTION 2 : QR Code -->
-            <div class="section" id="sec-qr">
-                <div class="section-title">SCANNER LE QR CODE</div>
-                <p class="section-desc">Scanne ce code avec WhatsApp pour connecter Miyabi.</p>
-
-                <div class="qr-wrapper">
-                    <!-- Loader pendant génération -->
-                    <div class="qr-loading" id="qrLoading">
-                        <div class="qr-spinner"></div>
-                        <div class="qr-loading-text">Génération du QR code...<br>Quelques secondes</div>
-                    </div>
-                    <!-- QR code affiché ici -->
-                    <div class="qr-container" id="qrContainer" style="display:none;">
-                        <div id="qrCode"></div>
-                    </div>
-                    <div class="qr-label" id="qrLabel" style="display:none;">Scan avec WhatsApp</div>
-                    <div class="qr-expires" id="qrExpires" style="display:none;">⏱ Expire dans 60s — se régénère automatiquement</div>
-                </div>
-
-                <div class="instructions">
-                    <div class="instr-item">
-                        <div class="instr-num">1</div>
-                        <span>Ouvre <strong>WhatsApp</strong> sur ton téléphone</span>
-                    </div>
-                    <div class="instr-item">
-                        <div class="instr-num">2</div>
-                        <span>Va dans <strong>Paramètres → Appareils liés → Connecter un appareil</strong></span>
-                    </div>
-                    <div class="instr-item">
-                        <div class="instr-num">3</div>
-                        <span>Scanne le QR code ci-dessus avec ton téléphone</span>
-                    </div>
-                </div>
-
-                <button class="btn btn-outline" onclick="goBack()">← Changer de numéro</button>
-            </div>
-
-            <!-- SECTION 3 : Connecté -->
+            <!-- SECTION 3 : Connecté avec succès -->
             <div class="section" id="sec-success">
                 <div class="success-icon">✅</div>
                 <div class="success-title">Miyabi est connectée !</div>
-                <p class="success-sub">Elle va t'envoyer un message de bienvenue d'ici quelques secondes.<br>Parle-lui naturellement sur WhatsApp.</p>
+                <p class="success-sub" id="connectedPhoneText">Connectée avec succès à WhatsApp.<br>Parle-lui naturellement dès maintenant.</p>
 
-                <div style="margin-top:1.2rem; padding:.9rem; background:rgba(232,97,154,.08); border-radius:10px; border:1px solid rgba(232,97,154,.2); font-size:.78rem; color:var(--text-dim); line-height:1.8;">
-                    💬 <strong style="color:var(--text)">Exemples :</strong><br>
-                    "télécharge la musique Rema Calm Down"<br>
-                    "cherche les news aujourd'hui"<br>
-                    "kick @quelquun" (dans un groupe)<br>
-                    "convertis cette vidéo en mp3"
+                <div style="margin-top:1.2rem; padding:.85rem; background:rgba(232,97,154,.08); border-radius:10px; border:1px solid rgba(232,97,154,.2); font-size:.78rem; color:var(--text-dim); line-height:1.7;">
+                    💬 <strong style="color:var(--text)">Exemples de messages :</strong><br>
+                    • "télécharge la musique Rema Calm Down"<br>
+                    • "cherche les news aujourd'hui"<br>
+                    • "crée la fiche de Raizen pseudo ChronoVolt classe Silent"<br>
+                    • "kick @utilisateur" (dans un groupe)
                 </div>
+
+                <button class="btn btn-outline" style="margin-top:1.2rem;" onclick="disconnectSession()">
+                    Déconnecter Miyabi
+                </button>
             </div>
         </div>
 
         <div class="features">
             <div class="feature"><div class="feat-icon">🎵</div><div class="feat-title">Téléchargement</div><div class="feat-desc">Musique et vidéos dans WhatsApp</div></div>
-            <div class="feature"><div class="feat-icon">🔍</div><div class="feat-title">Recherche web</div><div class="feat-desc">Infos en temps réel</div></div>
+            <div class="feature"><div class="feat-icon">🔍</div><div class="feat-title">Recherche web</div><div class="feat-desc">Infos et résumés via Gemini</div></div>
             <div class="feature"><div class="feat-icon">👥</div><div class="feat-title">Gestion groupe</div><div class="feat-desc">Kick, add, verrouillage</div></div>
-            <div class="feature"><div class="feat-icon">🧠</div><div class="feat-title">IA naturelle</div><div class="feat-desc">Parle normalement</div></div>
+            <div class="feature"><div class="feat-icon">⚔️</div><div class="feat-title">Fiches Joueurs</div><div class="feat-desc">Gems & Abyss Coins automatiques</div></div>
         </div>
 
-        <div class="footer">Miyabi Bot v2 · Propulsé par Gemini AI · © 2026</div>
+        <div class="footer">Miyabi Bot v2 · Propulsé par Gemini AI & Baileys · © 2026</div>
     </div>
 
     <script>
-        // Particules
+        // Particules d'arrière-plan
         for (let i = 0; i < 15; i++) {
             const p = document.createElement('div');
             p.className = 'particle';
@@ -389,47 +488,69 @@
 
         let socket = null;
         let currentSessionId = null;
-        let qrInstance = null;
+        let currentMethod = 'qr';
+        let qrPollTimer = null;
 
         function initSocket() {
+            if (socket) return;
             socket = io();
 
-            // QR code reçu
             socket.on('qr', function(data) {
-                showQR(data.qr);
+                if (currentMethod === 'qr' && data.qr) {
+                    showQR(data.qr);
+                }
             });
 
-            // Connecté !
-            socket.on('connected', function() {
+            socket.on('pairing_code', function(data) {
+                showPairingCode(data.code);
+            });
+
+            socket.on('connected', function(data) {
+                if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
+                const phone = data?.phone || '';
+                if (phone) {
+                    document.getElementById('connectedPhoneText').innerHTML =
+                        `Connectée avec succès au compte <strong>+${phone}</strong>.<br>Parle-lui naturellement dès maintenant sur WhatsApp.`;
+                }
+                document.getElementById('methodTabs').style.display = 'none';
                 goToSection('sec-success');
-                setStep(3);
             });
 
             socket.on('reconnecting', function() {
-                // Réinitialiser le loader QR
-                document.getElementById('qrLoading').style.display = 'flex';
-                document.getElementById('qrContainer').style.display = 'none';
-                document.getElementById('qrLabel').style.display = 'none';
-                document.getElementById('qrExpires').style.display = 'none';
+                if (currentMethod === 'qr') {
+                    document.getElementById('qrLoading').style.display = 'flex';
+                    document.getElementById('qrContainer').style.display = 'none';
+                    document.getElementById('qrLabel').style.display = 'none';
+                    document.getElementById('qrExpires').style.display = 'none';
+                }
             });
 
-            socket.on('disconnected', function() { goBack(); });
+            socket.on('disconnected', function() {
+                if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
+                document.getElementById('methodTabs').style.display = 'flex';
+                switchMethod(currentMethod);
+                if (currentMethod === 'qr') regenerateQR();
+            });
 
             socket.on('error', function(data) {
-                showPhoneError(data.message || 'Erreur inconnue');
-                goToSection('sec-phone');
-                setStep(1);
+                if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
+                showPhoneError(data.message || 'Erreur de connexion');
+                const btn = document.getElementById('btnGetCode');
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = 'Obtenir le code d\'association';
+                }
             });
         }
 
         function showQR(qrData) {
-            // Cacher le loader
+            if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
+
             document.getElementById('qrLoading').style.display = 'none';
             document.getElementById('qrContainer').style.display = 'block';
             document.getElementById('qrLabel').style.display = 'block';
             document.getElementById('qrExpires').style.display = 'block';
 
-            // Vider et régénérer le QR
             const qrEl = document.getElementById('qrCode');
             qrEl.innerHTML = '';
 
@@ -443,21 +564,203 @@
             });
         }
 
-        async function startConnection() {
-            const phone = document.getElementById('phoneInput').value.trim();
+        function showPairingCode(code) {
+            const btn = document.getElementById('btnGetCode');
+            btn.disabled = false;
+            btn.innerHTML = 'Régénérer le code';
+
+            const area = document.getElementById('codeDisplayArea');
+            const box = document.getElementById('codeBox');
+            if (area && box) {
+                area.style.display = 'block';
+                // Formater le code si possible (ex: 1234-5678)
+                box.textContent = code.length === 8 ? `${code.slice(0, 4)}-${code.slice(4)}` : code;
+            }
+        }
+
+        async function startQRGeneration() {
+            document.getElementById('qrIdle').style.display = 'none';
+            document.getElementById('qrActiveArea').style.display = 'block';
+            await connectWithQR();
+        }
+
+        async function cancelQRGeneration() {
+            if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
+            if (currentSessionId) {
+                await fetch('/api/disconnect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sessionId: currentSessionId })
+                }).catch(() => {});
+                currentSessionId = null;
+            }
+            document.getElementById('qrActiveArea').style.display = 'none';
+            document.getElementById('qrIdle').style.display = 'block';
+            document.getElementById('qrLoading').style.display = 'flex';
+            document.getElementById('qrContainer').style.display = 'none';
+            document.getElementById('qrLabel').style.display = 'none';
+            document.getElementById('qrExpires').style.display = 'none';
+            const qrEl = document.getElementById('qrCode');
+            if (qrEl) qrEl.innerHTML = '';
+        }
+
+        async function connectWithQR() {
+            initSocket();
             hidePhoneError();
 
-            if (!phone || phone.replace(/\D/g,'').length < 8) {
-                showPhoneError('Entre un numéro valide avec indicatif pays (ex: 237XXXXXXXXX)');
-                return;
-            }
+            if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
 
-            const btn = document.getElementById('btnConnect');
-            btn.disabled = true;
-            btn.innerHTML = '<span class="spinner"></span>Connexion...';
+            document.getElementById('qrLoading').style.display = 'flex';
+            document.getElementById('qrContainer').style.display = 'none';
+            document.getElementById('qrLabel').style.display = 'none';
+            document.getElementById('qrExpires').style.display = 'none';
 
             try {
                 const res = await fetch('/api/connect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-           
+                    body: JSON.stringify({ usePairingCode: false })
+                });
+                const data = await res.json();
+
+                if (!data.success) {
+                    throw new Error(data.error || 'Erreur lors de la génération du QR');
+                }
+
+                currentSessionId = data.sessionId;
+                socket.emit('join_session', currentSessionId);
+
+                // Si le QR code a déjà été envoyé dans la réponse HTTP
+                if (data.qr) {
+                    showQR(data.qr);
+                    return;
+                }
+
+                // Polling immédiat de secours
+                qrPollTimer = setInterval(async () => {
+                    if (!currentSessionId) {
+                        clearInterval(qrPollTimer);
+                        return;
+                    }
+                    try {
+                        const qrRes = await fetch(`/api/qr/${currentSessionId}`);
+                        const qrData = await qrRes.json();
+                        if (qrData.success && qrData.qr) {
+                            showQR(qrData.qr);
+                        } else if (qrData.status === 'connected') {
+                            clearInterval(qrPollTimer);
+                            goToSection('sec-success');
+                        }
+                    } catch (e) {}
+                }, 1500);
+
+            } catch (err) {
+                console.error('Erreur QR:', err);
+                const loadingText = document.querySelector('.qr-loading-text');
+                if (loadingText) loadingText.textContent = 'Erreur: ' + (err.message || 'Serveur inaccessible');
+            }
+        }
+
+        async function requestPairingCode() {
+            const phone = document.getElementById('phoneInput').value.trim();
+            hidePhoneError();
+
+            const cleanPhone = phone.replace(/\D/g, '');
+            if (!cleanPhone || cleanPhone.length < 8) {
+                showPhoneError('Entre un numéro valide avec indicatif pays (ex: 237692798136)');
+                return;
+            }
+
+            const btn = document.getElementById('btnGetCode');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span>Génération du code...';
+
+            initSocket();
+
+            try {
+                const res = await fetch('/api/connect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone: cleanPhone, usePairingCode: true })
+                });
+                const data = await res.json();
+
+                if (!data.success) {
+                    throw new Error(data.error || 'Erreur de génération');
+                }
+
+                currentSessionId = data.sessionId;
+                socket.emit('join_session', currentSessionId);
+
+            } catch (err) {
+                showPhoneError(err.message || 'Impossible d\'obtenir le code');
+                btn.disabled = false;
+                btn.innerHTML = 'Obtenir le code d\'association';
+            }
+        }
+
+        function switchMethod(method) {
+            currentMethod = method;
+            document.getElementById('tabQR').classList.toggle('active', method === 'qr');
+            document.getElementById('tabCode').classList.toggle('active', method === 'code');
+
+            if (method === 'qr') {
+                goToSection('sec-qr');
+            } else {
+                goToSection('sec-code');
+            }
+        }
+
+        function regenerateQR() {
+            if (currentSessionId) {
+                fetch('/api/disconnect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sessionId: currentSessionId })
+                }).catch(() => {});
+                currentSessionId = null;
+            }
+            connectWithQR();
+        }
+
+        async function disconnectSession() {
+            if (currentSessionId) {
+                await fetch('/api/disconnect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sessionId: currentSessionId })
+                }).catch(() => {});
+                currentSessionId = null;
+            }
+            document.getElementById('methodTabs').style.display = 'flex';
+            document.getElementById('qrActiveArea').style.display = 'none';
+            document.getElementById('qrIdle').style.display = 'block';
+            switchMethod('qr');
+        }
+
+        function goToSection(sectionId) {
+            document.querySelectorAll('.section').forEach(s => s.classList.remove('visible'));
+            const target = document.getElementById(sectionId);
+            if (target) target.classList.add('visible');
+        }
+
+        function showPhoneError(msg) {
+            const errEl = document.getElementById('phoneError');
+            const msgEl = document.getElementById('phoneErrorMsg');
+            if (errEl && msgEl) {
+                msgEl.textContent = msg;
+                errEl.style.display = 'flex';
+            }
+        }
+
+        function hidePhoneError() {
+            const errEl = document.getElementById('phoneError');
+            if (errEl) errEl.style.display = 'none';
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            initSocket();
+        });
+    </script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { GoogleGenAI } = require('@google/genai');
 const personality = require('./personality');
 const logger = require('../utils/logger');
 
@@ -13,23 +13,31 @@ class GeminiAI {
         if (this.apiKeys.length === 0 && process.env.GEMINI_API_KEY) {
             this.apiKeys.push(process.env.GEMINI_API_KEY);
         }
-        if (this.apiKeys.length === 0) {
-            throw new Error('Aucune clé API Gemini trouvée dans .env');
-        }
+
         this.currentKeyIndex = 0;
         this.conversations = new Map();
-        logger.info(`Gemini: ${this.apiKeys.length} clé(s) API chargée(s)`);
-        this._initModel();
+
+        if (this.apiKeys.length === 0) {
+            logger.warn('Gemini: Aucune clé API Gemini trouvée dans les variables d\'environnement. Mode fallback actif.');
+            this.ai = null;
+        } else {
+            logger.info(`Gemini: ${this.apiKeys.length} clé(s) API chargée(s)`);
+            this._initModel();
+        }
     }
 
     _initModel() {
+        if (this.apiKeys.length === 0) return;
         const key = this.apiKeys[this.currentKeyIndex];
-        this.genAI = new GoogleGenerativeAI(key);
-        this.model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+        this.ai = new GoogleGenAI({ apiKey: key });
         logger.info(`Gemini: utilisation clé #${this.currentKeyIndex + 1}`);
     }
 
     _rotateKey() {
+        if (this.apiKeys.length <= 1) {
+            logger.error('Toutes les clés API Gemini sont épuisées');
+            return false;
+        }
         const nextIndex = (this.currentKeyIndex + 1) % this.apiKeys.length;
         if (nextIndex === this.currentKeyIndex) {
             logger.error('Toutes les clés API Gemini sont épuisées');
@@ -42,7 +50,7 @@ class GeminiAI {
     }
 
     _isQuotaError(error) {
-        const msg = error.message || '';
+        const msg = (error && (error.message || error.statusText || '')) + '';
         return msg.includes('429') ||
                msg.includes('quota') ||
                msg.includes('RESOURCE_EXHAUSTED') ||
@@ -50,13 +58,28 @@ class GeminiAI {
                msg.includes('Too Many Requests');
     }
 
-    async _generateWithFallback(prompt) {
-        const maxRetries = this.apiKeys.length;
+    async _generateWithFallback(prompt, systemInstruction = null) {
+        if (!this.ai && this.apiKeys.length > 0) {
+            this._initModel();
+        }
+        if (!this.ai) {
+            return null;
+        }
+
+        const maxRetries = Math.max(1, this.apiKeys.length);
         let attempts = 0;
         while (attempts < maxRetries) {
             try {
-                const result = await this.model.generateContent(prompt);
-                return result.response.text().trim();
+                const requestConfig = {};
+                if (systemInstruction) {
+                    requestConfig.systemInstruction = systemInstruction;
+                }
+                const response = await this.ai.models.generateContent({
+                    model: 'gemini-3.8-flash',
+                    contents: prompt,
+                    config: requestConfig
+                });
+                return (response.text || '').trim();
             } catch (error) {
                 if (this._isQuotaError(error)) {
                     logger.warn(`Quota dépassé sur clé #${this.currentKeyIndex + 1}`);
@@ -64,7 +87,8 @@ class GeminiAI {
                     if (!rotated) return null;
                     attempts++;
                 } else {
-                    throw error;
+                    logger.error(`Erreur génération Gemini: ${error.message}`);
+                    return null;
                 }
             }
         }
@@ -135,15 +159,13 @@ Exemples wallet:
             const history = this.conversations.get(userId);
             const systemPrompt = this._buildSystemPrompt(emotion, isMother);
 
-            const fullPrompt = `${systemPrompt}
-
-Historique récent:
+            const fullPrompt = `Historique récent:
 ${history.slice(-6).map(h => `${h.role === 'user' ? 'Utilisateur' : 'Miyabi'}: ${h.content}`).join('\n')}
 
 Utilisateur: ${message}
 Miyabi:`;
 
-            const text = await this._generateWithFallback(fullPrompt);
+            const text = await this._generateWithFallback(fullPrompt, systemPrompt);
             let response = text || personality.fallbackResponse(emotion);
 
             if (response.startsWith('{') || response.startsWith('[')) {
@@ -170,12 +192,12 @@ Miyabi:`;
             CONVERT_TO_AUDIO: `Annonce que tu convertis la vidéo en audio. Style Miyabi.`
         };
 
-        const prompt = `${this._buildSystemPrompt(emotion, false)}
-${actionTexts[actionType] || 'Annonce que tu exécutes la tâche.'}
+        const systemPrompt = this._buildSystemPrompt(emotion, false);
+        const prompt = `${actionTexts[actionType] || 'Annonce que tu exécutes la tâche.'}
 IMPORTANT: UNE seule phrase courte, en français, sans émojis, sans JSON.`;
 
         try {
-            const text = await this._generateWithFallback(prompt);
+            const text = await this._generateWithFallback(prompt, systemPrompt);
             if (!text || text.startsWith('{')) return '...Je m\'en occupe.';
             return text;
         } catch {
@@ -193,16 +215,35 @@ IMPORTANT: UNE seule phrase courte, en français, sans émojis, sans JSON.`;
             GROUP_NO_TARGET:  'Dis qu\'il faut mentionner quelqu\'un.'
         };
 
-        const prompt = `${this._buildSystemPrompt(emotion, false)}
-${errors[errorType] || 'Dis qu\'une erreur s\'est produite.'}
+        const systemPrompt = this._buildSystemPrompt(emotion, false);
+        const prompt = `${errors[errorType] || 'Dis qu\'une erreur s\'est produite.'}
 IMPORTANT: UNE seule phrase, en français, sans émojis, sans JSON.`;
 
         try {
-            const text = await this._generateWithFallback(prompt);
+            const text = await this._generateWithFallback(prompt, systemPrompt);
             if (!text || text.startsWith('{')) return '...Quelque chose a merdé. Réessaie.';
             return text;
         } catch {
             return '...Quelque chose a merdé. Réessaie.';
+        }
+    }
+
+    async generateSearchSummary(query, rawResults, emotion) {
+        const systemPrompt = this._buildSystemPrompt(emotion, false);
+        const prompt = `Voici des résultats de recherche pour la requête "${query}":
+${rawResults.slice(0, 1500)}
+
+Résume ces informations pour l'utilisateur en restant fidèle à ton personnage Miyabi (tsundere, sarcastique, concise, sans émojis).
+Réponse en français, pas de markdown lourd, pas de salutations mielleuses.`;
+
+        try {
+            const text = await this._generateWithFallback(prompt, systemPrompt);
+            if (!text) {
+                return `Résultats pour "${query}":\n\n${rawResults.slice(0, 800)}`;
+            }
+            return text;
+        } catch {
+            return `Résultats pour "${query}":\n\n${rawResults.slice(0, 800)}`;
         }
     }
 
