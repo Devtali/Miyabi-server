@@ -1,3 +1,4 @@
+require('dotenv').config({ override: true });
 const { GoogleGenAI } = require('@google/genai');
 const personality = require('./personality');
 const logger = require('../utils/logger');

@@ -4,6 +4,8 @@ const fs = require('fs');
 const logger = require('../utils/logger');
 
 const TEMP_DIR = path.join(__dirname, '../../temp');
+const BINARY_NAME = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
+const LOCAL_YT_DLP = path.join(TEMP_DIR, BINARY_NAME);
 
 // S'assurer que le dossier temp existe
 if (!fs.existsSync(TEMP_DIR)) {
@@ -12,7 +14,30 @@ if (!fs.existsSync(TEMP_DIR)) {
 
 class DownloadService {
     constructor() {
-        this.ytDlp = new YTDlpWrap();
+        if (fs.existsSync(LOCAL_YT_DLP)) {
+            this.ytDlp = new YTDlpWrap(LOCAL_YT_DLP);
+        } else {
+            this.ytDlp = new YTDlpWrap();
+            this._checkAndDownloadBinary();
+        }
+    }
+
+    async _checkAndDownloadBinary() {
+        try {
+            await this.ytDlp.getVersion();
+        } catch {
+            try {
+                logger.info('yt-dlp non présent dans le système, téléchargement automatique en cours...');
+                await YTDlpWrap.downloadFromGithub(LOCAL_YT_DLP);
+                if (process.platform !== 'win32') {
+                    fs.chmodSync(LOCAL_YT_DLP, '755');
+                }
+                this.ytDlp = new YTDlpWrap(LOCAL_YT_DLP);
+                logger.info('yt-dlp configuré avec succès');
+            } catch (err) {
+                logger.warn(`Impossible de télécharger automatiquement yt-dlp: ${err.message}`);
+            }
+        }
     }
 
     // ──────────────────────────────────────────────

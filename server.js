@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ override: true });
 
 // Filtrer les messages de bruit de libsignal (Bad MAC et renégociation de sessions Signal)
 const origConsoleError = console.error;
