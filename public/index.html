@@ -217,6 +217,60 @@
             font-family: 'Outfit', sans-serif; font-size: .8rem; letter-spacing: .04em;
         }
         .btn-outline:hover { border-color: var(--text-dim); color: var(--text); }
+        .btn-danger {
+            width: 100%; padding: .85rem;
+            border-radius: 10px; cursor: pointer;
+            background: linear-gradient(135deg, rgba(240,98,98,.2), rgba(232,97,154,.2));
+            border: 1px solid rgba(240,98,98,.5);
+            color: #ff9d9d;
+            font-family: 'Cinzel', serif; font-size: .84rem;
+            font-weight: 600; letter-spacing: .06em;
+            transition: all .25s ease;
+            box-shadow: 0 4px 15px rgba(240,98,98,.15);
+        }
+        .btn-danger:hover {
+            background: linear-gradient(135deg, rgba(240,98,98,.38), rgba(232,97,154,.38));
+            border-color: var(--error);
+            color: #fff;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 25px rgba(240,98,98,.35);
+        }
+        .btn-danger:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+
+        .alert-toast {
+            position: fixed;
+            top: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-40px);
+            background: rgba(14, 16, 32, 0.95);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 0.8rem 1.4rem;
+            color: var(--text);
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+            opacity: 0;
+            pointer-events: none;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            z-index: 1000;
+            backdrop-filter: blur(10px);
+        }
+        .alert-toast.visible {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .alert-toast.success {
+            border-color: rgba(78, 204, 163, 0.5);
+            color: var(--success);
+        }
+        .alert-toast.danger {
+            border-color: rgba(240, 98, 98, 0.5);
+            color: #ff9d9d;
+        }
 
         /* ── QR Code ── */
         .qr-wrapper {
@@ -342,6 +396,12 @@
     <div class="bg-layer"></div>
     <div class="grid-overlay"></div>
 
+    <!-- Notification Toast -->
+    <div id="alertToast" class="alert-toast">
+        <span id="toastIcon">ℹ️</span>
+        <span id="toastMsg">Notification</span>
+    </div>
+
     <div class="page">
         <div class="header">
             <div class="logo-ring"><span>🎀</span></div>
@@ -459,9 +519,34 @@
                     • "kick @utilisateur" (dans un groupe)
                 </div>
 
-                <button class="btn btn-outline" style="margin-top:1.2rem;" onclick="disconnectSession()">
-                    Déconnecter Miyabi
-                </button>
+                <!-- Actions de session connectée -->
+                <div style="margin-top:1.4rem;" id="connectedSessionActions">
+                    <button class="btn btn-danger" id="btnShowDelete" onclick="showDeleteConfirm()">
+                        🗑️ Supprimer la session & recommencer
+                    </button>
+                    <button class="btn btn-outline" style="margin-top:.6rem;" onclick="disconnectSession()">
+                        Déconnecter temporairement
+                    </button>
+                </div>
+
+                <!-- Boîte de dialogue de confirmation de suppression complète -->
+                <div id="deleteConfirmBox" style="display:none; margin-top:1.2rem; padding:1.1rem; background:rgba(240,98,98,.08); border:1px solid rgba(240,98,98,.35); border-radius:14px; text-align:center; animation: fadeUp .25s ease;">
+                    <div style="font-size:1.6rem; margin-bottom:.3rem;">⚠️</div>
+                    <div style="font-size:.92rem; font-weight:600; color:#ff9d9d; margin-bottom:.3rem;">
+                        Supprimer définitivement la session ?
+                    </div>
+                    <div style="font-size:.78rem; color:var(--text-dim); line-height:1.5; margin-bottom:1rem;">
+                        La liaison avec ce compte WhatsApp sera révoquée et toutes les clés locales seront effacées. Tu pourras ensuite créer une toute nouvelle session (QR code ou code d'association).
+                    </div>
+                    <div style="display:flex; gap:.6rem;">
+                        <button class="btn btn-danger" id="btnConfirmDelete" style="margin-top:0; flex:1;" onclick="executeDeleteSession()">
+                            Oui, supprimer
+                        </button>
+                        <button class="btn btn-outline" style="margin-top:0; flex:1;" onclick="hideDeleteConfirm()">
+                            Annuler
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -523,6 +608,16 @@
                     document.getElementById('qrLabel').style.display = 'none';
                     document.getElementById('qrExpires').style.display = 'none';
                 }
+            });
+
+            socket.on('session_deleted', function() {
+                if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
+                currentSessionId = null;
+                document.getElementById('methodTabs').style.display = 'flex';
+                document.getElementById('qrActiveArea').style.display = 'none';
+                document.getElementById('qrIdle').style.display = 'block';
+                switchMethod('qr');
+                showToast('Session supprimée. Tu peux en créer une nouvelle.', 'success');
             });
 
             socket.on('disconnected', function() {
@@ -723,6 +818,72 @@
             connectWithQR();
         }
 
+        function showToast(msg, type = 'success') {
+            const toast = document.getElementById('alertToast');
+            const toastMsg = document.getElementById('toastMsg');
+            const toastIcon = document.getElementById('toastIcon');
+            if (!toast) return;
+
+            toast.className = `alert-toast visible ${type}`;
+            toastIcon.textContent = type === 'success' ? '✅' : '⚠️';
+            toastMsg.textContent = msg;
+
+            setTimeout(() => {
+                toast.classList.remove('visible');
+            }, 4000);
+        }
+
+        function showDeleteConfirm() {
+            document.getElementById('connectedSessionActions').style.display = 'none';
+            document.getElementById('deleteConfirmBox').style.display = 'block';
+        }
+
+        function hideDeleteConfirm() {
+            document.getElementById('deleteConfirmBox').style.display = 'none';
+            document.getElementById('connectedSessionActions').style.display = 'block';
+        }
+
+        async function executeDeleteSession() {
+            const btn = document.getElementById('btnConfirmDelete');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Suppression...';
+
+            if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
+
+            try {
+                const res = await fetch('/api/session/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sessionId: currentSessionId })
+                });
+                await res.json().catch(() => ({}));
+
+                currentSessionId = null;
+                hideDeleteConfirm();
+                btn.disabled = false;
+                btn.innerHTML = 'Oui, supprimer';
+
+                // Réinitialiser les écrans
+                document.getElementById('methodTabs').style.display = 'flex';
+                document.getElementById('qrActiveArea').style.display = 'none';
+                document.getElementById('qrIdle').style.display = 'block';
+                const codeArea = document.getElementById('codeDisplayArea');
+                if (codeArea) codeArea.style.display = 'none';
+                const phoneInput = document.getElementById('phoneInput');
+                if (phoneInput) phoneInput.value = '';
+
+                switchMethod('qr');
+                showToast('Session supprimée avec succès ! Tu peux connecter un nouveau compte.', 'success');
+
+            } catch (err) {
+                console.error('Erreur suppression session:', err);
+                hideDeleteConfirm();
+                btn.disabled = false;
+                btn.innerHTML = 'Oui, supprimer';
+                showToast('Erreur lors de la suppression de la session', 'danger');
+            }
+        }
+
         async function disconnectSession() {
             if (currentSessionId) {
                 await fetch('/api/disconnect', {
@@ -736,6 +897,31 @@
             document.getElementById('qrActiveArea').style.display = 'none';
             document.getElementById('qrIdle').style.display = 'block';
             switchMethod('qr');
+            showToast('Session déconnectée', 'success');
+        }
+
+        async function checkActiveSession() {
+            try {
+                const res = await fetch('/api/session/active');
+                const data = await res.json();
+                if (data.success && data.hasActiveSession && data.session) {
+                    currentSessionId = data.session.sessionId;
+                    if (socket) {
+                        socket.emit('join_session', currentSessionId);
+                    }
+                    if (data.session.status === 'connected') {
+                        const phone = data.session.phone;
+                        if (phone && phone !== 'Inconnu') {
+                            document.getElementById('connectedPhoneText').innerHTML =
+                                `Connectée avec succès au compte <strong>+${phone}</strong>.<br>Parle-lui naturellement dès maintenant sur WhatsApp.`;
+                        }
+                        document.getElementById('methodTabs').style.display = 'none';
+                        goToSection('sec-success');
+                    }
+                }
+            } catch (e) {
+                console.warn('Impossible de vérifier session active:', e);
+            }
         }
 
         function goToSection(sectionId) {
@@ -760,6 +946,7 @@
 
         window.addEventListener('DOMContentLoaded', () => {
             initSocket();
+            checkActiveSession();
         });
     </script>
 </body>

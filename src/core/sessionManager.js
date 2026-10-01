@@ -3,7 +3,8 @@ const {
     useMultiFileAuthState,
     DisconnectReason,
     fetchLatestBaileysVersion,
-    Browsers
+    Browsers,
+    isJidStatusBroadcast
 } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const pino = require('pino');
@@ -78,6 +79,10 @@ class SessionManager {
 
             // Optimisation bot : Ne pas télécharger tout l'historique ancien pour économiser RAM et temps
             syncFullHistory: false,
+            shouldSyncHistoryMessage: () => false,
+
+            // Ignorer les messages de statuts et diffusions qui causent des Bad MAC récurrents
+            shouldIgnoreJid: (jid) => isJidStatusBroadcast(jid) || (typeof jid === 'string' && (jid.endsWith('@broadcast') || jid.includes('broadcast'))),
 
             // Permettre au téléphone principal de continuer à recevoir les notifications push
             markOnlineOnConnect: false,
@@ -275,9 +280,14 @@ class SessionManager {
         return { success: true };
     }
 
-    deleteSession(sessionId) {
+    async deleteSession(sessionId) {
         const session = activeSessions.get(sessionId);
         if (session?.sock) {
+            try {
+                if (session.status === 'connected') {
+                    await session.sock.logout().catch(() => {});
+                }
+            } catch (e) {}
             try { session.sock.end(); } catch (e) {}
         }
         activeSessions.delete(sessionId);
@@ -290,6 +300,31 @@ class SessionManager {
                 fs.rmSync(sessionPath, { recursive: true, force: true });
             } catch (e) {}
         }
+        this.io.to(sessionId).emit('session_deleted', { sessionId });
+    }
+
+    async deleteAllSessions() {
+        const ids = Array.from(activeSessions.keys());
+        for (const id of ids) {
+            await this.deleteSession(id);
+        }
+        if (fs.existsSync(SESSIONS_DIR)) {
+            try {
+                for (const f of fs.readdirSync(SESSIONS_DIR)) {
+                    fs.rmSync(path.join(SESSIONS_DIR, f), { recursive: true, force: true });
+                }
+            } catch (e) {}
+        }
+    }
+
+    getActiveSession() {
+        for (const [id, session] of activeSessions.entries()) {
+            if (session.status === 'connected') {
+                const phone = session.sock?.user?.id ? session.sock.user.id.split(':')[0] : (session.phone || 'Inconnu');
+                return { sessionId: id, status: 'connected', phone };
+            }
+        }
+        return null;
     }
 
     getSession(sessionId) { return activeSessions.get(sessionId); }

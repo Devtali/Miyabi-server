@@ -1,4 +1,15 @@
 require('dotenv').config();
+
+// Filtrer les messages de bruit de libsignal (Bad MAC et renégociation de sessions Signal)
+const origConsoleError = console.error;
+console.error = function (...args) {
+    const text = args.map(a => (a && a.stack ? a.stack : String(a))).join(' ');
+    if (text.includes('Failed to decrypt message with any known session') || text.includes('Bad MAC')) {
+        return;
+    }
+    origConsoleError.apply(console, args);
+};
+
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');

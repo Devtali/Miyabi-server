@@ -2,15 +2,23 @@ const { GoogleGenAI } = require('@google/genai');
 const personality = require('./personality');
 const logger = require('../utils/logger');
 
-// Modèles avec fallback pour absorber les pics de charge (503/429)
-const MODELS = ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-flash-latest'];
+// Modèle fixé selon la demande utilisateur
+const MODEL_NAME = 'gemini-2.5-flash';
 
 class GeminiAI {
     constructor() {
         this.apiKeys = [];
 
-        // Clé officielle Google AI Studio en priorité
-        if (process.env.GEMINI_API_KEY) {
+        const isValidKey = (k) => {
+            if (!k || typeof k !== 'string') return false;
+            const trimmed = k.trim();
+            if (trimmed.length < 15) return false; // Ignore les placeholders courts comme 'clé1', 'clé2', etc.
+            if (/^(clé|cle|key|your_key|none)/i.test(trimmed)) return false;
+            return true;
+        };
+
+        // Clé officielle Google AI Studio ou utilisateur
+        if (isValidKey(process.env.GEMINI_API_KEY)) {
             this.apiKeys.push(process.env.GEMINI_API_KEY.trim());
         }
 
@@ -18,7 +26,7 @@ class GeminiAI {
         let i = 1;
         while (process.env[`GEMINI_API_KEY_${i}`]) {
             const extraKey = process.env[`GEMINI_API_KEY_${i}`].trim();
-            if (!this.apiKeys.includes(extraKey)) {
+            if (isValidKey(extraKey) && !this.apiKeys.includes(extraKey)) {
                 this.apiKeys.push(extraKey);
             }
             i++;
@@ -28,10 +36,10 @@ class GeminiAI {
         this.conversations = new Map();
 
         if (this.apiKeys.length === 0) {
-            logger.warn('Gemini: Aucune clé API Gemini trouvée. Mode fallback autonome actif.');
+            logger.warn('Gemini: Aucune clé API Gemini valide trouvée. Mode fallback autonome actif.');
             this.ai = null;
         } else {
-            logger.info(`Gemini: ${this.apiKeys.length} clé(s) API initialisée(s)`);
+            logger.info(`Gemini: ${this.apiKeys.length} clé(s) API valide(s) initialisée(s)`);
             this._initModel();
         }
     }
@@ -48,7 +56,8 @@ class GeminiAI {
                     }
                 }
             });
-            logger.info(`Gemini: utilisation clé #${this.currentKeyIndex + 1}`);
+            const masked = key.length > 10 ? `${key.substring(0, 6)}...${key.substring(key.length - 4)}` : '***';
+            logger.info(`Gemini: utilisation clé #${this.currentKeyIndex + 1} (${masked})`);
         } catch (err) {
             logger.error(`Gemini: échec initialisation client: ${err.message}`);
         }
@@ -86,39 +95,30 @@ class GeminiAI {
         const maxKeyAttempts = Math.max(1, this.apiKeys.length);
 
         for (let keyAttempt = 0; keyAttempt < maxKeyAttempts; keyAttempt++) {
-            for (const model of MODELS) {
-                try {
-                    const requestConfig = {};
-                    if (systemInstruction) {
-                        requestConfig.systemInstruction = systemInstruction;
-                    }
-
-                    const response = await this.ai.models.generateContent({
-                        model,
-                        contents: prompt,
-                        config: requestConfig
-                    });
-
-                    const text = (response?.text || '').trim();
-                    if (text) return text;
-
-                } catch (error) {
-                    const errMsg = error?.message || '';
-                    if (this._isRetryableError(error)) {
-                        logger.warn(`Gemini (${model}): indisponible (${errMsg.slice(0, 70)}...), essai modèle alternatif...`);
-                        continue; // Essayer le modèle suivant
-                    } else {
-                        logger.error(`Gemini erreur non-récupérable (${model}): ${errMsg.slice(0, 100)}`);
-                        break;
-                    }
+            try {
+                const requestConfig = {};
+                if (systemInstruction) {
+                    requestConfig.systemInstruction = systemInstruction;
                 }
-            }
 
-            // Si tous les modèles ont échoué sur cette clé, tenter la rotation
-            if (this.apiKeys.length > 1) {
-                const rotated = this._rotateKey();
-                if (!rotated) break;
-            } else {
+                const response = await this.ai.models.generateContent({
+                    model: MODEL_NAME,
+                    contents: prompt,
+                    config: requestConfig
+                });
+
+                const text = (response?.text || '').trim();
+                if (text) return text;
+
+            } catch (error) {
+                const errMsg = error?.message || '';
+                logger.warn(`Gemini (${MODEL_NAME}): erreur lors de la requête (${errMsg.slice(0, 80)}...)`);
+
+                if (this._isRetryableError(error) && this.apiKeys.length > 1) {
+                    const rotated = this._rotateKey();
+                    if (!rotated) break;
+                    continue;
+                }
                 break;
             }
         }

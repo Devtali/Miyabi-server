@@ -74,11 +74,40 @@ router.get('/status/:sessionId', (req, res) => {
     return res.json({ sessionId, status });
 });
 
+// GET /api/session/active — Vérifier s'il y a déjà une session active/connectée
+router.get('/session/active', (req, res) => {
+    const active = sessionManager.getActiveSession();
+    return res.json({
+        success: true,
+        hasActiveSession: !!active,
+        session: active || null
+    });
+});
+
+// POST /api/session/delete — Supprimer définitivement une session (ou toutes) pour en refaire une nouvelle
+router.post('/session/delete', async (req, res) => {
+    try {
+        const { sessionId } = req.body || {};
+        if (sessionId) {
+            await sessionManager.deleteSession(sessionId);
+        } else {
+            await sessionManager.deleteAllSessions();
+        }
+        return res.json({ success: true, message: 'Session supprimée avec succès' });
+    } catch (err) {
+        console.error('Erreur suppression session:', err);
+        return res.status(500).json({ success: false, error: 'Erreur lors de la suppression' });
+    }
+});
+
 // POST /api/disconnect — Déconnecter une session
-router.post('/disconnect', (req, res) => {
+router.post('/disconnect', async (req, res) => {
     const { sessionId } = req.body || {};
-    if (!sessionId) return res.status(400).json({ success: false, error: 'sessionId requis' });
-    sessionManager.deleteSession(sessionId);
+    if (sessionId) {
+        await sessionManager.deleteSession(sessionId);
+    } else {
+        await sessionManager.deleteAllSessions();
+    }
     return res.json({ success: true, message: 'Session supprimée' });
 });
 
