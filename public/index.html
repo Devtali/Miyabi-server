@@ -571,6 +571,23 @@
             document.body.appendChild(p);
         }
 
+        // ── Authentification admin (clé affichée dans la console serveur / ADMIN_KEY) ──
+        function getAdminKey(forcePrompt) {
+            let k = forcePrompt ? '' : sessionStorage.getItem('miyabiAdminKey');
+            if (!k) {
+                k = (prompt('Clé admin Miyabi :') || '').trim();
+                if (k) sessionStorage.setItem('miyabiAdminKey', k);
+            }
+            return k;
+        }
+
+        async function apiFetch(url, opts = {}) {
+            opts.headers = Object.assign({}, opts.headers, { 'x-admin-key': getAdminKey() });
+            const res = await fetch(url, opts);
+            if (res.status === 401) sessionStorage.removeItem('miyabiAdminKey');
+            return res;
+        }
+
         let socket = null;
         let currentSessionId = null;
         let currentMethod = 'qr';
@@ -578,7 +595,13 @@
 
         function initSocket() {
             if (socket) return;
-            socket = io();
+            socket = io({ auth: { key: getAdminKey() } });
+            socket.on('connect_error', function(err) {
+                if (err && err.message === 'unauthorized') {
+                    sessionStorage.removeItem('miyabiAdminKey');
+                    showToast('Clé admin invalide', 'error');
+                }
+            });
 
             socket.on('qr', function(data) {
                 if (currentMethod === 'qr' && data.qr) {
@@ -682,7 +705,7 @@
         async function cancelQRGeneration() {
             if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
             if (currentSessionId) {
-                await fetch('/api/disconnect', {
+                await apiFetch('/api/disconnect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ sessionId: currentSessionId })
@@ -711,7 +734,7 @@
             document.getElementById('qrExpires').style.display = 'none';
 
             try {
-                const res = await fetch('/api/connect', {
+                const res = await apiFetch('/api/connect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ usePairingCode: false })
@@ -738,7 +761,7 @@
                         return;
                     }
                     try {
-                        const qrRes = await fetch(`/api/qr/${currentSessionId}`);
+                        const qrRes = await apiFetch(`/api/qr/${currentSessionId}`);
                         const qrData = await qrRes.json();
                         if (qrData.success && qrData.qr) {
                             showQR(qrData.qr);
@@ -773,7 +796,7 @@
             initSocket();
 
             try {
-                const res = await fetch('/api/connect', {
+                const res = await apiFetch('/api/connect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ phone: cleanPhone, usePairingCode: true })
@@ -808,7 +831,7 @@
 
         function regenerateQR() {
             if (currentSessionId) {
-                fetch('/api/disconnect', {
+                apiFetch('/api/disconnect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ sessionId: currentSessionId })
@@ -851,7 +874,7 @@
             if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
 
             try {
-                const res = await fetch('/api/session/delete', {
+                const res = await apiFetch('/api/session/delete', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ sessionId: currentSessionId })
@@ -886,7 +909,7 @@
 
         async function disconnectSession() {
             if (currentSessionId) {
-                await fetch('/api/disconnect', {
+                await apiFetch('/api/disconnect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ sessionId: currentSessionId })
@@ -902,7 +925,7 @@
 
         async function checkActiveSession() {
             try {
-                const res = await fetch('/api/session/active');
+                const res = await apiFetch('/api/session/active');
                 const data = await res.json();
                 if (data.success && data.hasActiveSession && data.session) {
                     currentSessionId = data.session.sessionId;
