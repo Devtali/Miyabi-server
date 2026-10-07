@@ -18,14 +18,19 @@ const path = require('path');
 
 const SessionManager = require('./src/core/sessionManager');
 const { router: apiRouter, setSessionManager } = require('./src/routes/api');
+const { requireAdmin, socketAuth, ADMIN_KEY, keyWasGenerated } = require('./src/middleware/auth');
 
 const app = express();
 const server = http.createServer(app);
+// CORS : même origine par défaut. Pour autoriser un autre site : CORS_ORIGIN=https://mon-site.com
+const corsOrigin = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : false;
 const io = new Server(server, {
-    cors: { origin: '*', methods: ['GET', 'POST'] }
+    cors: corsOrigin ? { origin: corsOrigin, methods: ['GET', 'POST'] } : undefined
 });
+io.use(socketAuth);
 
-app.use(cors());
+app.set('trust proxy', 1);
+app.use(cors({ origin: corsOrigin }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -34,7 +39,7 @@ setSessionManager(sessionManager);
 
 setInterval(() => sessionManager.cleanupStaleSessions(), 300000);
 
-app.use('/api', apiRouter);
+app.use('/api', requireAdmin, apiRouter);
 
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
@@ -67,4 +72,10 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`\n🎀 Miyabi Server démarré sur le port ${PORT}`);
     console.log(`🌐 Interface: http://0.0.0.0:${PORT}`);
     console.log(`📡 API: http://0.0.0.0:${PORT}/api\n`);
+    if (keyWasGenerated) {
+        console.log(`🔑 ADMIN_KEY non définie dans .env — clé temporaire générée : ${ADMIN_KEY}`);
+        console.log('   (définis ADMIN_KEY dans .env pour la garder entre les redémarrages)\n');
+    } else {
+        console.log('🔑 Interface protégée par ADMIN_KEY\n');
+    }
 });
