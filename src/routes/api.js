@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
+const { rateLimit } = require('../middleware/auth');
 
 let sessionManager;
 
@@ -9,7 +10,7 @@ function setSessionManager(sm) {
 }
 
 // POST /api/connect — Initier une session (QR code officiel sans numéro requis)
-router.post('/connect', async (req, res) => {
+router.post('/connect', rateLimit({ windowMs: 60000, max: 6 }), async (req, res) => {
     try {
         const { phone, usePairingCode } = req.body || {};
 
