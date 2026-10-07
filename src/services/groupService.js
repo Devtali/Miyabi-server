@@ -130,7 +130,14 @@ class GroupService {
     // ──────────────────────────────────────────────
     async isBotAdmin(sock, groupId) {
         try {
-            const metadata = await sock.groupMetadata(groupId);
+            // Cache partagé avec sessionManager (chargement paresseux : évite l'import circulaire)
+            let groupCache = null;
+            try { groupCache = require('../core/sessionManager').groupCache; } catch (e) {}
+            let metadata = groupCache?.get(groupId);
+            if (!metadata) {
+                metadata = await sock.groupMetadata(groupId);
+                groupCache?.set(groupId, metadata);
+            }
             const botJid = sock.user?.id;
             if (!botJid || !metadata?.participants) return false;
             const botNum = botJid.split(':')[0].split('@')[0];
