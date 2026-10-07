@@ -15,6 +15,7 @@ const NodeCache = require('node-cache');
 
 const messageHandler = require('../handlers/messageHandler');
 const logger = require('../utils/logger');
+const { inspectMessage } = require('../utils/messageSanitizer');
 
 const SESSIONS_DIR = path.join(__dirname, '../../sessions');
 if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true });
@@ -118,7 +119,15 @@ class SessionManager {
 
             // Cache des métadonnées de groupe (réduit de 90% les appels réseau en groupe)
             cachedGroupMetadata: async (jid) => {
-                return groupCache.get(jid);
+                const cached = groupCache.get(jid);
+                if (cached) return cached;
+                try {
+                    const meta = await sock.groupMetadata(jid);
+                    groupCache.set(jid, meta);
+                    return meta;
+                } catch (e) {
+                    return undefined; // Baileys fera sa propre requête
+                }
             },
 
             // Prévisualisation des liens de haute qualité
@@ -272,6 +281,10 @@ class SessionManager {
         });
 
         // ── Gestion du cache des métadonnées de groupe ──
+        sock.ev.on('groups.upsert', (groups) => {
+            for (const g of groups) groupCache.set(g.id, g);
+        });
+
         sock.ev.on('groups.update', async (groupUpdates) => {
             for (const update of groupUpdates) {
                 const cached = groupCache.get(update.id);
@@ -282,13 +295,8 @@ class SessionManager {
         });
 
         sock.ev.on('group-participants.update', async ({ id, participants, action }) => {
-            const cached = groupCache.get(id);
-            if (cached) {
-                try {
-                    const fresh = await sock.groupMetadata(id);
-                    groupCache.set(id, fresh);
-                } catch (e) {}
-            }
+            // Participants modifiés : invalider, le cache se remplira à la prochaine demande
+            groupCache.del(id);
 
             if (action === 'add') {
                 for (const participant of participants) {
@@ -308,6 +316,29 @@ class SessionManager {
             if (type !== 'notify') return;
             for (const msg of messages) {
                 if (!msg || !msg.key) continue;
+
+                // ── SANITISATION : bloquer les messages toxiques avant tout traitement/stockage ──
+                if (!msg.key.fromMe && msg.key.remoteJid !== 'status@broadcast') {
+                    const check = inspectMessage(msg);
+                    if (check.suspicious) {
+                        const from = msg.key.remoteJid;
+                        logger.warn(`⚠️ [SANITIZER] Message suspect bloqué — De: ${msg.key.participant || from} — Raison: ${check.reason}`);
+                        try {
+                            if (msg.messageTimestamp) {
+                                await sock.chatModify({
+                                    deleteForMe: {
+                                        deleteMedia: false,
+                                        key: msg.key,
+                                        timestamp: Number(msg.messageTimestamp)
+                                    }
+                                }, from);
+                            }
+                        } catch (e) {
+                            logger.warn(`[SANITIZER] Suppression locale impossible : ${e.message}`);
+                        }
+                        continue;
+                    }
+                }
 
                 // Enregistrer pour getMessage
                 if (msg.key.id && msg.message) {
