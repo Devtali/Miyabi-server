@@ -3,6 +3,7 @@ const {
     useMultiFileAuthState,
     DisconnectReason,
     fetchLatestBaileysVersion,
+    makeCacheableSignalKeyStore,
     Browsers,
     isJidStatusBroadcast
 } = require('@whiskeysockets/baileys');
@@ -20,15 +21,21 @@ if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true }
 
 // ── Caches recommandés par la documentation officielle Baileys (baileys.wiki) ──
 // 1. Cache pour éviter les boucles infinies de retry de messages
-const msgRetryCounterCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
+const msgRetryCounterCache = new NodeCache({ stdTTL: 300, checkperiod: 60, useClones: false });
 
 // 2. Cache pour les métadonnées de groupe (évite les requêtes réseau excessives)
-const groupCache = new NodeCache({ stdTTL: 600, checkperiod: 120 });
+const groupCache = new NodeCache({ stdTTL: 600, checkperiod: 120, useClones: false });
 
 // 3. Store en mémoire pour getMessage (indispensable pour les retries et le déchiffrement Signal)
-const messageStore = new NodeCache({ stdTTL: 1800, checkperiod: 300 });
+const messageStore = new NodeCache({ stdTTL: 1800, checkperiod: 300, useClones: false });
 
 const activeSessions = new Map();
+
+// ── Paramètres du pairing code (logique inspirée de l'exemple SEN/NEXUS) ──
+const PAIRING_DELAY_MS = 4000;      // laisser le socket s'initialiser avant de demander le code
+const PAIRING_MAX_ATTEMPTS = 3;     // nb max de codes générés pour une même session
+const MAX_RECONNECTS = 10;          // arrêt des reconnexions infinies
+const formatPairingCode = (code) => code?.match(/.{1,4}/g)?.join('-') || code;
 
 class SessionManager {
     constructor(io) {
@@ -58,6 +65,13 @@ class SessionManager {
 
         const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
 
+        // Si une ancienne socket existe pour ce sessionId (reconnexion), la fermer proprement
+        const previous = activeSessions.get(sessionId);
+        if (previous?.sock) {
+            try { previous.sock.ev.removeAllListeners(); } catch (e) {}
+            try { previous.sock.end(undefined); } catch (e) {}
+        }
+
         // Récupérer dynamiquement la dernière version supportée de WhatsApp Web
         let version;
         try {
@@ -72,7 +86,10 @@ class SessionManager {
         // Configuration alignée avec les recommandations officielles de baileys.wiki
         const sock = makeWASocket({
             version,
-            auth: state,
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'fatal' }))
+            },
             printQRInTerminal: false,
             logger: pino({ level: 'silent' }),
             browser: Browsers.ubuntu('Chrome'),
@@ -114,11 +131,12 @@ class SessionManager {
 
         const session = {
             sock,
-            status: 'pending',
+            status: previous?.status === 'connected' ? 'pending' : (previous?.status || 'pending'),
             phone: phoneNumber,
             lastQR: null,
-            lastPairingCode: null,
-            createdAt: Date.now()
+            lastPairingCode: previous?.lastPairingCode || null,
+            pairingAttempts: previous?.pairingAttempts || 0,
+            createdAt: previous?.createdAt || Date.now()
         };
 
         activeSessions.set(sessionId, session);
@@ -127,20 +145,38 @@ class SessionManager {
             this.phoneIndex.set(phoneNumber, sessionId);
         }
 
-        // Code d'appairage par numéro si demandé
-        if (usePairingCode && phoneNumber && !sock.authState.creds.registered) {
-            setTimeout(async () => {
-                try {
-                    const code = await sock.requestPairingCode(phoneNumber);
-                    logger.info(`🔐 Pairing code généré pour ${sessionId}: ${code}`);
-                    session.lastPairingCode = code;
-                    this.io.to(sessionId).emit('pairing_code', { code });
-                    this._updateStatus(sessionId, 'code_ready');
-                } catch (err) {
-                    logger.error(`Erreur pairing code: ${err.message}`);
-                    this.io.to(sessionId).emit('error', { message: 'Erreur code d\'appairage: ' + err.message });
-                }
-            }, 1500);
+        // ── PAIRING CODE (logique de l'exemple : si non enregistré → demande après délai) ──
+        if (usePairingCode && !sock.authState.creds.registered) {
+            const cleanPhone = (phoneNumber || '').replace(/[^0-9]/g, '');
+
+            if (!cleanPhone) {
+                logger.error(`❌ Aucun numéro de pairing défini pour la session ${sessionId}`);
+                this.io.to(sessionId).emit('error', { message: 'Numéro de téléphone manquant pour le code d\'appairage' });
+            } else if (session.pairingAttempts >= PAIRING_MAX_ATTEMPTS) {
+                logger.warn(`⛔ Trop de tentatives de pairing pour ${sessionId}`);
+                this.io.to(sessionId).emit('error', { message: 'Trop de tentatives. Relance la génération du code.' });
+                this.deleteSession(sessionId);
+                return { success: false, error: 'too_many_attempts' };
+            } else {
+                logger.info(`⏳ Demande de pairing pour : ${cleanPhone}`);
+                setTimeout(async () => {
+                    // La session a pu être supprimée/remplacée pendant le délai
+                    if (activeSessions.get(sessionId) !== session) return;
+                    if (sock.authState.creds.registered) return;
+                    try {
+                        session.pairingAttempts++;
+                        const raw = await sock.requestPairingCode(cleanPhone);
+                        const code = formatPairingCode(raw);
+                        logger.info(`✅ CODE DE JUMELAGE (${sessionId}) : ${code}`);
+                        session.lastPairingCode = code;
+                        this.io.to(sessionId).emit('pairing_code', { code });
+                        this._updateStatus(sessionId, 'code_ready');
+                    } catch (err) {
+                        logger.error(`❌ Erreur pairing (vérifiez le numéro) : ${err.message}`);
+                        this.io.to(sessionId).emit('error', { message: 'Erreur code d\'appairage : ' + err.message });
+                    }
+                }, PAIRING_DELAY_MS);
+            }
         }
 
         // ── Événements de connexion (baileys.wiki lifecycle) ──
@@ -186,17 +222,29 @@ class SessionManager {
 
                 logger.warn(`⚠️ Connexion fermée (${sessionId}), code: ${statusCode}`);
 
+                // Ignorer les évènements d'une ancienne socket déjà remplacée
+                if (activeSessions.get(sessionId) !== session) return;
+
                 if (statusCode === DisconnectReason.loggedOut || statusCode === DisconnectReason.badSession) {
                     logger.info(`🚪 Session ${sessionId} déconnectée / session invalide`);
                     this._updateStatus(sessionId, 'logged_out');
                     this.io.to(sessionId).emit('disconnected', { reason: 'logged_out' });
                     this.deleteSession(sessionId);
                 } else if (statusCode === DisconnectReason.restartRequired) {
+                    // Normal juste après un pairing réussi : on relance avec les creds enregistrés
                     logger.info(`🔄 Redémarrage requis pour ${sessionId}, reconnexion immédiate...`);
-                    this.createSession(sessionId, phoneNumber, usePairingCode);
+                    this.createSession(sessionId, phoneNumber, usePairingCode)
+                        .catch(e => logger.error(`Reconnexion échouée (${sessionId}): ${e.message}`));
                 } else {
                     const attempts = (this.reconnectAttempts.get(sessionId) || 0) + 1;
                     this.reconnectAttempts.set(sessionId, attempts);
+
+                    if (attempts > MAX_RECONNECTS) {
+                        logger.error(`⛔ ${sessionId} : trop d'échecs de reconnexion, abandon.`);
+                        this.io.to(sessionId).emit('disconnected', { reason: 'max_reconnects' });
+                        this.deleteSession(sessionId);
+                        return;
+                    }
 
                     const delay = Math.min(2000 * Math.pow(1.5, attempts - 1), 30000);
                     logger.info(`⏳ Tentative de reconnexion #${attempts} dans ${Math.round(delay / 1000)}s...`);
@@ -205,8 +253,9 @@ class SessionManager {
                     this.io.to(sessionId).emit('reconnecting', { attempt: attempts });
 
                     setTimeout(() => {
-                        if (activeSessions.has(sessionId)) {
-                            this.createSession(sessionId, phoneNumber, usePairingCode);
+                        if (activeSessions.get(sessionId) === session) {
+                            this.createSession(sessionId, phoneNumber, usePairingCode)
+                                .catch(e => logger.error(`Reconnexion échouée (${sessionId}): ${e.message}`));
                         }
                     }, delay);
                 }
@@ -348,7 +397,7 @@ class SessionManager {
     cleanupStaleSessions() {
         const now = Date.now();
         for (const [id, session] of activeSessions.entries()) {
-            if (session.status === 'pending' && now - session.createdAt > 600000) {
+            if (['pending', 'qr_ready', 'code_ready', 'reconnecting'].includes(session.status) && now - session.createdAt > 600000) {
                 this.deleteSession(id);
             }
         }
