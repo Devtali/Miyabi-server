@@ -62,7 +62,7 @@ io.on('connection', (socket) => {
     });
 });
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`\n🎀 Miyabi Server démarré sur le port ${PORT}`);
     console.log(`🌐 Interface: http://0.0.0.0:${PORT}`);
